@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { advanceGame, createGameState } from './engine';
+import { LEVELS } from './levels';
 import {
   DEFAULT_PROGRESS,
   PROGRESS_STORAGE_KEY,
@@ -19,15 +21,41 @@ function createMemoryStorage(): StorageLike {
 }
 
 describe('local progress', () => {
+  it('unlocks the next stage when the runner clears its distance goal', () => {
+    const level = LEVELS[0]!;
+    const initial = createGameState(level);
+    const nearFinish = {
+      ...initial,
+      distance: level.distanceGoal - 1,
+      nextObstacleIn: 5,
+      nextPickupIn: 5,
+    };
+    const clearedRun = advanceGame(nearFinish, 0.05, () => 0.9);
+    const progress = recordRun(
+      DEFAULT_PROGRESS,
+      clearedRun.level.id,
+      clearedRun.score,
+      clearedRun.collectibles,
+      clearedRun.status === 'won',
+    );
+
+    expect(clearedRun.status).toBe('won');
+    expect(progress.unlockedLevel).toBe(2);
+    expect(progress.clearedLevels).toEqual([1]);
+  });
+
   it('unlocks the next stage after a clear and preserves the best score', () => {
     const firstRun = recordRun(DEFAULT_PROGRESS, 1, 840, 4, true);
     const replay = recordRun(firstRun, 1, 620, 2, false);
+    const secondStageClear = recordRun(firstRun, 2, 1_250, 3, true);
 
     expect(firstRun.unlockedLevel).toBe(2);
     expect(replay.unlockedLevel).toBe(2);
     expect(replay.clearedLevels).toEqual([1]);
     expect(replay.bestScores[1]).toBe(840);
     expect(replay.totalCollectibles).toBe(6);
+    expect(secondStageClear.unlockedLevel).toBe(3);
+    expect(secondStageClear.clearedLevels).toEqual([1, 2]);
   });
 
   it('round-trips a valid record and safely ignores malformed storage', () => {

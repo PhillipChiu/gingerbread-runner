@@ -1,6 +1,37 @@
 import { useEffect, useRef } from 'react';
 import { loadCharacterFrames } from '../game/sprites';
 
+const PREVIEW_FRAMES_PER_SECOND = 11;
+
+function getElapsedSeconds(now: number, startedAt: number): number {
+  if (!Number.isFinite(now) || !Number.isFinite(startedAt)) {
+    return 0;
+  }
+
+  const elapsedMilliseconds = now - startedAt;
+  return Number.isFinite(elapsedMilliseconds)
+    ? Math.max(0, elapsedMilliseconds) / 1_000
+    : 0;
+}
+
+export function getCharacterPreviewFrameIndex(
+  now: number,
+  startedAt: number,
+  frameCount: number,
+  reduceMotion: boolean,
+): number {
+  if (reduceMotion || !Number.isInteger(frameCount) || frameCount <= 0) {
+    return 0;
+  }
+
+  const elapsedSeconds = getElapsedSeconds(now, startedAt);
+  const frameIndex = Math.floor(elapsedSeconds * PREVIEW_FRAMES_PER_SECOND) % frameCount;
+
+  return Number.isInteger(frameIndex) && frameIndex >= 0 && frameIndex < frameCount
+    ? frameIndex
+    : 0;
+}
+
 export default function CharacterPreview() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -26,18 +57,27 @@ export default function CharacterPreview() {
       context.clearRect(0, 0, canvas.width, canvas.height);
 
       if (frames && frames.length > 0) {
-        const elapsed = reduceMotion ? 0 : (now - startedAt) / 1_000;
-        const frame = frames[Math.floor(elapsed * 11) % frames.length]!;
-        const scale = Math.min(208 / frame.width, 186 / frame.height);
-        const width = frame.width * scale;
-        const height = frame.height * scale;
-        context.drawImage(
-          frame,
-          (canvas.width - width) / 2,
-          canvas.height - height - 9 + (reduceMotion ? 0 : Math.sin(elapsed * 6) * 3),
-          width,
-          height,
+        const elapsed = getElapsedSeconds(now, startedAt);
+        const frameIndex = getCharacterPreviewFrameIndex(
+          now,
+          startedAt,
+          frames.length,
+          reduceMotion,
         );
+        const frame = frames[frameIndex];
+
+        if (frame) {
+          const scale = Math.min(208 / frame.width, 186 / frame.height);
+          const width = frame.width * scale;
+          const height = frame.height * scale;
+          context.drawImage(
+            frame,
+            (canvas.width - width) / 2,
+            canvas.height - height - 9 + (reduceMotion ? 0 : Math.sin(elapsed * 6) * 3),
+            width,
+            height,
+          );
+        }
       }
 
       if (!reduceMotion) {
