@@ -361,7 +361,7 @@ function App() {
               </div>
               <div className="how-to-tip">
                 <span className="tip-energy">✦</span>
-                <span>收集果實，補充能量</span>
+                <span>收集果實，補充體力</span>
               </div>
             </section>
 
@@ -505,10 +505,10 @@ function App() {
                   </div>
                   <div className="hud-card hud-energy">
                     <div className="energy-heading">
-                      <span className="hud-label">續航能量</span>
+                      <span className="hud-label">體力</span>
                       <strong>{Math.round(snapshot.energy)}%</strong>
                     </div>
-                    <div className="energy-track" aria-label={`剩餘續航能量 ${Math.round(snapshot.energy)}%`}>
+                    <div className="energy-track" aria-label={`剩餘體力 ${Math.round(snapshot.energy)}%`}>
                       <span style={{ width: `${Math.max(0, Math.min(100, snapshot.energy))}%` }} />
                     </div>
                     <span className="hud-symbol energy-symbol">✦</span>
@@ -575,7 +575,7 @@ function App() {
                             ? activeLevel.id < LEVELS.length
                               ? `下一段「${getLevel(activeLevel.id + 1).name}」已經解鎖。`
                               : '十段步道全數完成，小跑者抵達星光站！'
-                            : '續航能量已耗盡；收集能量果實回復體力，再試著跑得更遠。'}
+                            : '體力已耗盡；收集能量果實補充體力，再試著跑得更遠。'}
                         </p>
                         <div className="result-summary">
                           <div><span>星光分數</span><strong>{formatNumber(snapshot.score)}</strong></div>
@@ -650,7 +650,7 @@ function App() {
                 <div className="mission-card">
                   <div className="mission-card-heading">
                     <span className="mission-icon">✧</span>
-                    <span>本關任務</span>
+                    <span>本遊戲自訂任務</span>
                   </div>
                   <h2>跑完這段步道</h2>
                   <p>抵達終點即可解鎖下一關，沿途收集能量果實可延長本次奔跑。</p>
@@ -680,7 +680,7 @@ function App() {
 
                 <p className="energy-note">
                   <span>✦</span>
-                  本 Prototype 自訂平衡（非官方數值）：起跑 {CUSTOM_GAME_TUNING.startingEnergy} 點；每秒 −{CUSTOM_GAME_TUNING.passiveEnergyDrainPerSecond}、碰撞 −{CUSTOM_GAME_TUNING.collisionEnergyCost}（{CUSTOM_GAME_TUNING.collisionGraceSeconds} 秒寬限）、果實 +{CUSTOM_GAME_TUNING.pickupEnergyRestore}。歸零即結束。
+                  本 Prototype 自訂平衡（非官方數值）：起跑體力 {CUSTOM_GAME_TUNING.startingEnergy} 點；每秒 −{CUSTOM_GAME_TUNING.passiveEnergyDrainPerSecond}、碰撞 −{CUSTOM_GAME_TUNING.collisionEnergyCost}、果實 +{CUSTOM_GAME_TUNING.pickupEnergyRestore}。歸零即結束。
                 </p>
                 {isCleared && (
                   <div className="cleared-note">

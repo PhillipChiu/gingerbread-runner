@@ -94,7 +94,7 @@ export default function GameCanvas(props: GameCanvasProps) {
         0,
         0,
       );
-      drawGameScene(context, state, frames, now);
+      drawGameScene(context, state, frames);
 
       if (lastSnapshotAt === 0 || now - lastSnapshotAt >= 120) {
         currentProps.onSnapshot(toGameSnapshot(state));

@@ -12,7 +12,6 @@ export const CUSTOM_GAME_TUNING = {
   passiveEnergyDrainPerSecond: 1.2,
   collisionEnergyCost: 34,
   pickupEnergyRestore: 18,
-  collisionGraceSeconds: 1.1,
   distanceScoreMultiplier: 0.08,
   pickupBaseScore: 110,
   comboScorePerPickup: 8,
@@ -51,7 +50,6 @@ export interface GameState {
   energy: number;
   collectibles: number;
   combo: number;
-  invulnerability: number;
   player: PlayerState;
   obstacles: Obstacle[];
   pickups: Pickup[];
@@ -91,7 +89,6 @@ export function createGameState(level: LevelConfig): GameState {
     energy: CUSTOM_GAME_TUNING.startingEnergy,
     collectibles: 0,
     combo: 0,
-    invulnerability: 0,
     player: {
       jumpHeight: 0,
       jumpVelocity: 0,
@@ -179,7 +176,6 @@ export function advanceGame(
     state.score + speed * delta * CUSTOM_GAME_TUNING.distanceScoreMultiplier;
   let collectibles = state.collectibles;
   let combo = state.combo;
-  let invulnerability = Math.max(0, state.invulnerability - delta);
   let nextEntityId = state.nextEntityId;
 
   let nextObstacleIn = state.nextObstacleIn - delta;
@@ -224,12 +220,10 @@ export function advanceGame(
     if (
       overlapsRunner &&
       !canAvoid &&
-      invulnerability <= 0 &&
       !collidedThisFrame &&
       energy > 0
     ) {
       energy = Math.max(0, energy - CUSTOM_GAME_TUNING.collisionEnergyCost);
-      invulnerability = CUSTOM_GAME_TUNING.collisionGraceSeconds;
       collidedThisFrame = true;
       continue;
     }
@@ -302,7 +296,6 @@ export function advanceGame(
     energy,
     collectibles,
     combo,
-    invulnerability,
     player,
     obstacles: remainingObstacles,
     pickups: remainingPickups,

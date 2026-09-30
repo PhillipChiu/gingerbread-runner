@@ -257,7 +257,6 @@ function drawRunner(
   context: CanvasRenderingContext2D,
   state: GameState,
   frames: SpriteFrame[] | null,
-  now: number,
 ): void {
   const jumping = state.player.jumpHeight > 0;
   const sliding = state.player.slideRemaining > 0;
@@ -287,10 +286,7 @@ function drawRunner(
     return;
   }
 
-  const blinking =
-    state.invulnerability > 0 && Math.floor(now / 80) % 2 === 0;
   context.save();
-  context.globalAlpha = blinking ? 0.5 : 1;
 
   if (sliding) {
     context.drawImage(frame, PLAYER_CENTER_X - 64, GROUND_Y - 72, 128, 72);
@@ -358,7 +354,6 @@ export function drawGameScene(
   context: CanvasRenderingContext2D,
   state: GameState,
   frames: SpriteFrame[] | null,
-  now: number,
 ): void {
   context.clearRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
   drawBackground(context, state);
@@ -370,7 +365,7 @@ export function drawGameScene(
     drawObstacle(context, obstacle);
   }
 
-  drawRunner(context, state, frames, now);
+  drawRunner(context, state, frames);
 
   context.fillStyle = 'rgba(255,255,255,0.16)';
   context.fillRect(0, WORLD_HEIGHT - 2, WORLD_WIDTH, 2);

@@ -29,7 +29,7 @@ describe('ten-stage runner data', () => {
 });
 
 describe('runner state', () => {
-  it('supports grounded jumps and timed slides but not double-jumps', () => {
+  it('supports grounded jumps and timed slides, and rejects airborne jump requests', () => {
     const initial = createGameState(LEVELS[0]!);
     const jumping = applyPlayerAction(initial, 'jump');
     const sliding = applyPlayerAction(initial, 'slide');
@@ -52,11 +52,9 @@ describe('runner state', () => {
 
     expect(hit.energy).toBeLessThan(initial.energy);
     expect(hit.status).toBe('running');
-    expect(hit.invulnerability).toBeGreaterThan(0);
     expect(hit.obstacles).toHaveLength(0);
     expect(hit.combo).toBe(state.combo);
     expect(hit.score).toBeGreaterThan(state.score);
-    expect(hit).not.toHaveProperty('lives');
   });
 
   it('ends the run when collision drains the single energy resource', () => {
