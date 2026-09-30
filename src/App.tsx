@@ -322,8 +322,8 @@ function App() {
                   <div className="landscape-hill landscape-hill-back" />
                   <div className="landscape-hill landscape-hill-front" />
                   <div className="landscape-path" />
-                  <div className="landscape-flower flower-one">✳</div>
-                  <div className="landscape-flower flower-two">✳</div>
+                  <div className="landscape-flower flower-one" aria-hidden="true">✳</div>
+                  <div className="landscape-flower flower-two" aria-hidden="true">✳</div>
                   <div className="preview-orb orb-one" />
                   <div className="preview-orb orb-two" />
                   <CharacterPreview />

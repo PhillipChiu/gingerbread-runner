@@ -566,9 +566,15 @@ svg {
 .landscape-flower {
   position: absolute;
   z-index: 3;
-  color: #f6edc6;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(231, 236, 210, 0.22);
+  border-radius: 50%;
+  color: #fff1b3;
+  background: #102b33;
   font-size: 22px;
-  text-shadow: 0 2px 4px rgba(47, 75, 58, 0.2);
 }
 
 .flower-one {
