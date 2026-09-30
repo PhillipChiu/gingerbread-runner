@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
+import { RUNNER_FRAMES_PER_SECOND } from '../game/runnerAnimation';
 import { loadCharacterFrames } from '../game/sprites';
 
-const PREVIEW_FRAMES_PER_SECOND = 11;
+const PREVIEW_FRAMES_PER_SECOND = RUNNER_FRAMES_PER_SECOND;
 
 function getElapsedSeconds(now: number, startedAt: number): number {
   if (!Number.isFinite(now) || !Number.isFinite(startedAt)) {

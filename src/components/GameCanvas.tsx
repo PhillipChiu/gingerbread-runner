@@ -77,6 +77,8 @@ export default function GameCanvas(props: GameCanvasProps) {
     let state: GameState | null = null;
     let frames: SpriteFrame[] | null = null;
     let active = true;
+    const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+    let reduceMotion = motionPreference.matches;
     const announcedObstacleIds = new Set<number>();
     let render: (now: number) => void = () => {};
 
@@ -85,6 +87,12 @@ export default function GameCanvas(props: GameCanvasProps) {
         animationFrame = window.requestAnimationFrame(render);
       }
     };
+
+    const onMotionPreferenceChange = (): void => {
+      reduceMotion = motionPreference.matches;
+      scheduleFrame();
+    };
+    motionPreference.addEventListener('change', onMotionPreferenceChange);
 
     void loadCharacterFrames()
       .then((loadedFrames) => {
@@ -162,7 +170,7 @@ export default function GameCanvas(props: GameCanvasProps) {
         0,
         0,
       );
-      drawGameScene(context, state, frames);
+      drawGameScene(context, state, frames, reduceMotion);
 
       const isActive =
         currentProps.isRunning && state.status === 'running';
@@ -228,6 +236,7 @@ export default function GameCanvas(props: GameCanvasProps) {
     scheduleFrame();
     return () => {
       active = false;
+      motionPreference.removeEventListener('change', onMotionPreferenceChange);
       if (animationFrame !== null) {
         window.cancelAnimationFrame(animationFrame);
       }
