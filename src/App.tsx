@@ -136,7 +136,7 @@ function App() {
     if (screen === 'paused' || screen === 'result') {
       dialogPrimaryRef.current?.focus();
     } else if (screen === 'playing' && previousScreen !== 'playing') {
-      gameRegionRef.current?.focus();
+      gameRegionRef.current?.focus({ preventScroll: true });
     } else if (screen === 'menu' && previousScreen !== 'menu') {
       mapHeadingRef.current?.focus();
     }
