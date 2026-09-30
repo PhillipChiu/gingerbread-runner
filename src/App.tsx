@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import CharacterPreview from './components/CharacterPreview';
 import GameCanvas, { type ActionRequest } from './components/GameCanvas';
 import {
+  CUSTOM_GAME_TUNING,
   type GameSnapshot,
   type GameState,
   type PlayerAction,
@@ -21,8 +22,7 @@ const INITIAL_SNAPSHOT: GameSnapshot = {
   distance: 0,
   goalDistance: LEVELS[0]!.distanceGoal,
   progress: 0,
-  energy: 100,
-  lives: 3,
+  energy: CUSTOM_GAME_TUNING.startingEnergy,
   collectibles: 0,
   combo: 0,
   speed: LEVELS[0]!.baseSpeed,
@@ -90,7 +90,6 @@ function getSnapshot(state: GameState): GameSnapshot {
     goalDistance: state.level.distanceGoal,
     progress: Math.min(state.distance / state.level.distanceGoal, 1),
     energy: state.energy,
-    lives: state.lives,
     collectibles: state.collectibles,
     combo: state.combo,
     speed: state.level.baseSpeed,
@@ -504,21 +503,12 @@ function App() {
                     <strong>{formatNumber(snapshot.score)}</strong>
                     <span className="hud-symbol score-symbol">✦</span>
                   </div>
-                  <div className="hud-card hud-lives">
-                    <span className="hud-label">活力</span>
-                    <strong className="heart-row" aria-label={`${snapshot.lives} 格生命`}>
-                      {Array.from({ length: 3 }, (_, index) => (
-                        <span className={index < snapshot.lives ? 'heart-filled' : 'heart-empty'} key={index}>♥</span>
-                      ))}
-                    </strong>
-                    <span className="hud-symbol life-symbol">♥</span>
-                  </div>
                   <div className="hud-card hud-energy">
                     <div className="energy-heading">
-                      <span className="hud-label">能量護盾</span>
+                      <span className="hud-label">續航能量</span>
                       <strong>{Math.round(snapshot.energy)}%</strong>
                     </div>
-                    <div className="energy-track" aria-label={`能量 ${Math.round(snapshot.energy)}%`}>
+                    <div className="energy-track" aria-label={`剩餘續航能量 ${Math.round(snapshot.energy)}%`}>
                       <span style={{ width: `${Math.max(0, Math.min(100, snapshot.energy))}%` }} />
                     </div>
                     <span className="hud-symbol energy-symbol">✦</span>
@@ -585,7 +575,7 @@ function App() {
                             ? activeLevel.id < LEVELS.length
                               ? `下一段「${getLevel(activeLevel.id + 1).name}」已經解鎖。`
                               : '十段步道全數完成，小跑者抵達星光站！'
-                            : '護盾和活力都已用盡，下一次一定能跑得更遠。'}
+                            : '續航能量已耗盡；收集能量果實回復體力，再試著跑得更遠。'}
                         </p>
                         <div className="result-summary">
                           <div><span>星光分數</span><strong>{formatNumber(snapshot.score)}</strong></div>
@@ -663,7 +653,7 @@ function App() {
                     <span>本關任務</span>
                   </div>
                   <h2>跑完這段步道</h2>
-                  <p>抵達終點即可解鎖下一關，途中收集能量果實讓護盾保持充足。</p>
+                  <p>抵達終點即可解鎖下一關，沿途收集能量果實可延長本次奔跑。</p>
                   <div className="mission-goal">
                     <span className="goal-track-icon">↗</span>
                     <span><small>目標路程</small><strong>{formatMeters(activeLevel.distanceGoal)}</strong></span>
@@ -690,7 +680,7 @@ function App() {
 
                 <p className="energy-note">
                   <span>✦</span>
-                  撞到障礙會消耗護盾；護盾歸零時會失去一格活力。
+                  本 Prototype 自訂平衡（非官方數值）：起跑 {CUSTOM_GAME_TUNING.startingEnergy} 點；每秒 −{CUSTOM_GAME_TUNING.passiveEnergyDrainPerSecond}、碰撞 −{CUSTOM_GAME_TUNING.collisionEnergyCost}（{CUSTOM_GAME_TUNING.collisionGraceSeconds} 秒寬限）、果實 +{CUSTOM_GAME_TUNING.pickupEnergyRestore}。歸零即結束。
                 </p>
                 {isCleared && (
                   <div className="cleared-note">

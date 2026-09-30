@@ -144,7 +144,7 @@ export const LEVELS: readonly LevelConfig[] = [
     id: 6,
     name: '雲霧高地',
     region: '風鈴山腰',
-    description: '山風吹得更急，收集能量果實保持護盾充足。',
+    description: '山風吹得更急，收集能量果實延長本次奔跑。',
     distanceGoal: 10_800,
     baseSpeed: 320,
     speedRamp: 48,

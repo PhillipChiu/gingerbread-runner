@@ -29,7 +29,7 @@ describe('ten-stage runner data', () => {
 });
 
 describe('runner state', () => {
-  it('supports grounded jumps and timed slides', () => {
+  it('supports grounded jumps and timed slides but not double-jumps', () => {
     const initial = createGameState(LEVELS[0]!);
     const jumping = applyPlayerAction(initial, 'jump');
     const sliding = applyPlayerAction(initial, 'slide');
@@ -39,10 +39,11 @@ describe('runner state', () => {
     expect(applyPlayerAction(jumping, 'jump')).toBe(jumping);
   });
 
-  it('absorbs a collision with energy before spending a life', () => {
+  it('uses only run energy as a collision penalty', () => {
     const initial = createGameState(LEVELS[0]!);
     const state = {
       ...initial,
+      combo: 3,
       nextObstacleIn: 5,
       nextPickupIn: 5,
       obstacles: [{ id: 10, type: 'stump' as const, x: 246, width: 58 }],
@@ -50,9 +51,41 @@ describe('runner state', () => {
     const hit = advanceGame(state, 0.05, () => 0.9);
 
     expect(hit.energy).toBeLessThan(initial.energy);
-    expect(hit.lives).toBe(initial.lives);
+    expect(hit.status).toBe('running');
     expect(hit.invulnerability).toBeGreaterThan(0);
     expect(hit.obstacles).toHaveLength(0);
+    expect(hit.combo).toBe(state.combo);
+    expect(hit.score).toBeGreaterThan(state.score);
+    expect(hit).not.toHaveProperty('lives');
+  });
+
+  it('ends the run when collision drains the single energy resource', () => {
+    const initial = createGameState(LEVELS[0]!);
+    const state = {
+      ...initial,
+      energy: 20,
+      nextObstacleIn: 5,
+      nextPickupIn: 5,
+      obstacles: [{ id: 10, type: 'stump' as const, x: 246, width: 58 }],
+    };
+    const exhausted = advanceGame(state, 0.05, () => 0.9);
+
+    expect(exhausted.energy).toBe(0);
+    expect(exhausted.status).toBe('lost');
+  });
+
+  it('ends the run when passive energy drain reaches zero', () => {
+    const initial = createGameState(LEVELS[0]!);
+    const state = {
+      ...initial,
+      energy: 0.01,
+      nextObstacleIn: 5,
+      nextPickupIn: 5,
+    };
+    const exhausted = advanceGame(state, 0.05, () => 0.9);
+
+    expect(exhausted.energy).toBe(0);
+    expect(exhausted.status).toBe('lost');
   });
 
   it('allows a jump to clear a tree stump', () => {
@@ -67,11 +100,10 @@ describe('runner state', () => {
     const cleared = advanceGame(state, 0.05, () => 0.9);
 
     expect(cleared.energy).toBeGreaterThan(99);
-    expect(cleared.lives).toBe(initial.lives);
     expect(cleared.obstacles).toHaveLength(1);
   });
 
-  it('collects a nearby energy fruit for score and shield energy', () => {
+  it('collects a nearby energy fruit for score and run energy', () => {
     const initial = createGameState(LEVELS[0]!);
     const state = {
       ...initial,
