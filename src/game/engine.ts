@@ -72,7 +72,9 @@ export interface GameSnapshot {
 const GRAVITY = 1_650;
 const JUMP_IMPULSE = 675;
 const SLIDE_DURATION = 0.72;
-const PICKUP_HEIGHTS = [218, 242, 267, 290] as const;
+const PICKUP_HEIGHTS = [150, 270, 306, 270] as const;
+const PICKUP_VERTICAL_TOLERANCE = 32;
+const SLIDE_PICKUP_CENTER_OFFSET = 20;
 
 export function getRunSpeed(level: LevelConfig, distance: number): number {
   const progress = Math.min(Math.max(distance / level.distanceGoal, 0), 1);
@@ -251,13 +253,17 @@ export function advanceGame(
       state.level.pickupInterval * (0.83 + Math.min(random(), 0.99) * 0.34);
   }
 
-  const playerCenterY = GROUND_Y - 56 - player.jumpHeight;
+  const playerCenterY =
+    GROUND_Y -
+    56 -
+    player.jumpHeight +
+    (player.slideRemaining > 0 ? SLIDE_PICKUP_CENTER_OFFSET : 0);
   const remainingPickups: Pickup[] = [];
 
   for (const pickup of pickups) {
     const closeEnough =
       Math.abs(pickup.x - PLAYER_CENTER_X) < 54 &&
-      Math.abs(pickup.y - playerCenterY) < 59;
+      Math.abs(pickup.y - playerCenterY) < PICKUP_VERTICAL_TOLERANCE;
 
     if (closeEnough) {
       collectibles += 1;

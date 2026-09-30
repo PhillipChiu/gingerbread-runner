@@ -10,7 +10,7 @@
   font-weight: 400;
   --ink: #f6f0df;
   --muted: #a9b8b2;
-  --subtle: #6f8884;
+  --subtle: #c3d0c6; /* Small secondary copy on the dark UI surfaces. */
   --dark: #102b33;
   --dark-raised: #173840;
   --dark-soft: #1b4147;
@@ -52,7 +52,8 @@ button {
 }
 
 button:focus-visible,
-a:focus-visible {
+a:focus-visible,
+.accessible-hints-toggle input:focus-visible {
   outline: 3px solid var(--lime);
   outline-offset: 4px;
 }
@@ -73,6 +74,19 @@ svg {
 .app-shell {
   min-height: 100vh;
   overflow: hidden;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .site-header,
@@ -286,6 +300,42 @@ svg {
   margin-left: 5px;
 }
 
+.accessible-hints-toggle {
+  width: fit-content;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 18px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.accessible-hints-toggle input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  margin: 1px 0 0;
+  accent-color: var(--lime-strong);
+  cursor: pointer;
+}
+
+.accessible-hints-toggle > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.accessible-hints-toggle strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.accessible-hints-toggle small {
+  color: var(--subtle);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .button-secondary {
   color: #e8ebdb;
   border-color: rgba(231, 236, 210, 0.24);
@@ -318,7 +368,7 @@ svg {
 }
 
 .hero-stat span {
-  color: #8fa39d;
+  color: var(--subtle);
   font-size: 10px;
 }
 
@@ -358,7 +408,7 @@ svg {
 
 .art-card-label,
 .footer-overline {
-  color: #8fa8a0;
+  color: var(--subtle);
   font-family: var(--mono);
   font-size: 8px;
   letter-spacing: 0.13em;
@@ -588,7 +638,7 @@ svg {
 }
 
 .footer-next i {
-  color: #55716e;
+  color: var(--subtle);
   font-style: normal;
 }
 
@@ -769,7 +819,7 @@ kbd {
 }
 
 .map-progress > strong small {
-  color: #718b83;
+  color: var(--subtle);
   font-size: 10px;
 }
 
@@ -857,10 +907,6 @@ kbd {
   content: '';
 }
 
-.level-card-locked {
-  opacity: 0.5;
-}
-
 .level-card-cleared {
   border-color: rgba(215, 228, 143, 0.2);
 }
@@ -916,7 +962,7 @@ kbd {
 
 .level-region {
   margin-top: 5px;
-  color: #8fa59d;
+  color: var(--subtle);
   font-size: 9px;
 }
 
@@ -928,7 +974,7 @@ kbd {
   gap: 3px;
   margin-top: auto;
   padding-top: 15px;
-  color: #93a9a0;
+  color: var(--subtle);
   font-family: var(--mono);
   font-size: 8px;
 }
@@ -942,7 +988,7 @@ kbd {
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: #526e6c;
+  background: var(--muted);
 }
 
 .difficulty-dots .dot-active {
@@ -960,7 +1006,7 @@ kbd {
 
 .map-footnote {
   margin: 17px 0 0;
-  color: #80968f;
+  color: var(--subtle);
   font-size: 10px;
 }
 
@@ -970,7 +1016,7 @@ kbd {
   align-items: center;
   justify-content: space-between;
   border-top: 1px solid var(--line);
-  color: #81968e;
+  color: var(--subtle);
   font-size: 9px;
 }
 
@@ -1163,7 +1209,7 @@ kbd {
 
 .hud-label {
   display: block;
-  color: #96aaa0;
+  color: var(--subtle);
   font-size: 9px;
 }
 
@@ -1236,7 +1282,7 @@ kbd {
 }
 
 .distance-row > div > span {
-  color: #91a79d;
+  color: var(--subtle);
   font-size: 9px;
 }
 
@@ -1248,7 +1294,7 @@ kbd {
 }
 
 .distance-row i {
-  color: #708b83;
+  color: var(--subtle);
   font-style: normal;
 }
 
@@ -1425,7 +1471,7 @@ kbd {
 }
 
 .result-summary span {
-  color: #91a69c;
+  color: var(--subtle);
   font-size: 8px;
 }
 
@@ -1468,7 +1514,7 @@ kbd {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: #99ada2;
+  color: var(--subtle);
   font-size: 9px;
 }
 
@@ -1504,7 +1550,9 @@ kbd {
 }
 
 .touch-button:disabled {
-  opacity: 0.48;
+  border-style: dashed;
+  color: var(--muted);
+  background: rgba(31, 69, 70, 0.52);
 }
 
 .touch-icon {
@@ -1514,7 +1562,7 @@ kbd {
 }
 
 .touch-button kbd {
-  color: #9bafa0;
+  color: var(--subtle);
   font-size: 7px;
 }
 
@@ -1553,7 +1601,7 @@ kbd {
 
 .mission-card > p {
   margin: 0;
-  color: #94aaa0;
+  color: var(--subtle);
   font-size: 10px;
   line-height: 1.8;
 }
@@ -1592,7 +1640,7 @@ kbd {
 }
 
 .mission-goal small {
-  color: #8ea39b;
+  color: var(--subtle);
   font-size: 8px;
 }
 
@@ -1652,7 +1700,7 @@ kbd {
 }
 
 .guide-row small {
-  color: #879f96;
+  color: var(--subtle);
   font-size: 8px;
 }
 
@@ -1669,7 +1717,7 @@ kbd {
   padding: 12px 13px;
   border: 1px solid rgba(215, 228, 143, 0.1);
   border-radius: 7px;
-  color: #9caf9e;
+  color: var(--subtle);
   background: rgba(215, 228, 143, 0.035);
   font-size: 9px;
   line-height: 1.65;

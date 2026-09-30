@@ -14,6 +14,7 @@ import {
   writeProgress,
   type ProgressData,
 } from './game/progress';
+import { isInteractiveKeyboardTarget } from './game/keyboard';
 
 type Screen = 'menu' | 'playing' | 'paused' | 'result';
 
@@ -107,6 +108,7 @@ function App() {
   const [snapshot, setSnapshot] = useState<GameSnapshot>(INITIAL_SNAPSHOT);
   const [actionRequest, setActionRequest] = useState<ActionRequest | null>(null);
   const [outcome, setOutcome] = useState<'won' | 'lost' | null>(null);
+  const [accessibleHintsEnabled, setAccessibleHintsEnabled] = useState(false);
   const actionIdRef = useRef(0);
 
   const activeLevel = getLevel(activeLevelId);
@@ -179,6 +181,10 @@ function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
+      if (isInteractiveKeyboardTarget(event.target)) {
+        return;
+      }
+
       const key = event.key.toLowerCase();
       if (key === 'escape' || key === 'p') {
         if (screen === 'playing' || screen === 'paused') {
@@ -188,13 +194,8 @@ function App() {
         return;
       }
 
-      const target = event.target;
-      const targetIsInteractive =
-        target instanceof HTMLElement &&
-        target.closest('button, a, input, select, textarea, [contenteditable="true"]');
       if (
         screen === 'menu' &&
-        !targetIsInteractive &&
         (key === 'enter' || key === ' ')
       ) {
         event.preventDefault();
@@ -274,6 +275,17 @@ function App() {
                     選擇步道 <ArrowIcon />
                   </a>
                 </div>
+                <label className="accessible-hints-toggle">
+                  <input
+                    type="checkbox"
+                    checked={accessibleHintsEnabled}
+                    onChange={(event) => setAccessibleHintsEnabled(event.target.checked)}
+                  />
+                  <span>
+                    <strong>開啟螢幕閱讀器跑道提示</strong>
+                    <small>由輔助技術播報關卡開始、前方障礙與結算結果。</small>
+                  </span>
+                </label>
 
                 <div className="hero-stats" aria-label="冒險紀錄">
                   <div className="hero-stat">
@@ -361,7 +373,7 @@ function App() {
               </div>
               <div className="how-to-tip">
                 <span className="tip-energy">✦</span>
-                <span>收集果實，補充體力</span>
+                <span>跳躍／滑行收集不同高度的果實</span>
               </div>
             </section>
 
@@ -539,6 +551,7 @@ function App() {
                     level={activeLevel}
                     runKey={runKey}
                     isRunning={screen === 'playing'}
+                    accessibleHintsEnabled={accessibleHintsEnabled}
                     actionRequest={actionRequest}
                     onSnapshot={setSnapshot}
                     onFinish={finishRun}

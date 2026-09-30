@@ -119,6 +119,43 @@ describe('runner state', () => {
     expect(collected.pickups).toHaveLength(0);
   });
 
+  it('requires a jump to collect a high energy fruit', () => {
+    const initial = createGameState(LEVELS[0]!);
+    const state = {
+      ...initial,
+      nextObstacleIn: 5,
+      nextPickupIn: 5,
+      pickups: [{ id: 13, x: PLAYER_CENTER_X + 12, y: 150 }],
+    };
+    const standing = advanceGame(state, 0.05, () => 0.9);
+    let jumping = applyPlayerAction(state, 'jump');
+    for (let frame = 0; frame < 4 && jumping.collectibles === 0; frame += 1) {
+      jumping = advanceGame(jumping, 0.05, () => 0.9);
+    }
+
+    expect(standing.collectibles).toBe(0);
+    expect(standing.pickups).toHaveLength(1);
+    expect(jumping.collectibles).toBe(1);
+    expect(jumping.pickups).toHaveLength(0);
+  });
+
+  it('requires a slide to collect a low energy fruit', () => {
+    const initial = createGameState(LEVELS[0]!);
+    const state = {
+      ...initial,
+      nextObstacleIn: 5,
+      nextPickupIn: 5,
+      pickups: [{ id: 14, x: PLAYER_CENTER_X + 12, y: 306 }],
+    };
+    const standing = advanceGame(state, 0.05, () => 0.9);
+    const sliding = advanceGame(applyPlayerAction(state, 'slide'), 0.05, () => 0.9);
+
+    expect(standing.collectibles).toBe(0);
+    expect(standing.pickups).toHaveLength(1);
+    expect(sliding.collectibles).toBe(1);
+    expect(sliding.pickups).toHaveLength(0);
+  });
+
   it('finishes a level at its configured distance goal', () => {
     const initial = createGameState(LEVELS[0]!);
     const almostThere = {
