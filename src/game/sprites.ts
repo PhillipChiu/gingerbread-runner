@@ -1,4 +1,5 @@
 import characterSheetUrl from '../../main_character.png';
+import { getRunnerFrameLayout } from './runnerAnimation';
 
 export type SpriteFrame = HTMLCanvasElement;
 
@@ -88,6 +89,85 @@ function makeTransparentBackground(frame: HTMLCanvasElement): void {
   context.putImageData(image, 0, 0);
 }
 
+function keepLargestForegroundComponent(frame: HTMLCanvasElement): void {
+  const context = frame.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    return;
+  }
+
+  const image = context.getImageData(0, 0, frame.width, frame.height);
+  const pixels = image.data;
+  const pixelCount = frame.width * frame.height;
+  const visited = new Uint8Array(pixelCount);
+  const keep = new Uint8Array(pixelCount);
+  const queue = new Int32Array(pixelCount);
+  let queueLength = 0;
+  let largestComponentSize = 0;
+
+  for (let start = 0; start < pixelCount; start += 1) {
+    if (visited[start] || pixels[start * 4 + 3]! <= 12) {
+      continue;
+    }
+
+    const componentStart = queueLength;
+    queue[queueLength] = start;
+    queueLength += 1;
+    visited[start] = 1;
+
+    for (let head = componentStart; head < queueLength; head += 1) {
+      const pixelIndex = queue[head]!;
+      const x = pixelIndex % frame.width;
+      const y = Math.floor(pixelIndex / frame.width);
+
+      for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+        for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+          if (offsetX === 0 && offsetY === 0) {
+            continue;
+          }
+
+          const neighborX = x + offsetX;
+          const neighborY = y + offsetY;
+          if (
+            neighborX < 0 ||
+            neighborX >= frame.width ||
+            neighborY < 0 ||
+            neighborY >= frame.height
+          ) {
+            continue;
+          }
+
+          const neighborIndex = neighborY * frame.width + neighborX;
+          if (
+            !visited[neighborIndex] &&
+            pixels[neighborIndex * 4 + 3]! > 12
+          ) {
+            visited[neighborIndex] = 1;
+            queue[queueLength] = neighborIndex;
+            queueLength += 1;
+          }
+        }
+      }
+    }
+
+    const componentSize = queueLength - componentStart;
+    if (componentSize > largestComponentSize) {
+      largestComponentSize = componentSize;
+      keep.fill(0);
+      for (let index = componentStart; index < queueLength; index += 1) {
+        keep[queue[index]!] = 1;
+      }
+    }
+  }
+
+  for (let index = 0; index < pixelCount; index += 1) {
+    if (!keep[index]) {
+      pixels[index * 4 + 3] = 0;
+    }
+  }
+
+  context.putImageData(image, 0, 0);
+}
+
 function trimFrame(source: HTMLCanvasElement): HTMLCanvasElement {
   const context = source.getContext('2d', { willReadFrequently: true });
   if (!context) {
@@ -155,10 +235,20 @@ function createFrames(image: HTMLImageElement): SpriteFrame[] {
       crop.height,
     );
     makeTransparentBackground(frame);
+    keepLargestForegroundComponent(frame);
     frames.push(trimFrame(frame));
   }
 
-  return frames;
+  const layout = getRunnerFrameLayout(frames);
+  return frames.map((source, index) => {
+    const normalized = document.createElement('canvas');
+    normalized.width = layout.width;
+    normalized.height = layout.height;
+    normalized
+      .getContext('2d')
+      ?.drawImage(source, layout.placements[index]!.x, layout.placements[index]!.y);
+    return normalized;
+  });
 }
 
 export function loadCharacterFrames(): Promise<SpriteFrame[]> {

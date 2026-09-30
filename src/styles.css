@@ -1,6 +1,6 @@
 :root {
   font-family: 'Noto Sans TC', 'Microsoft JhengHei', 'Segoe UI', sans-serif;
-  color: #f6f0df;
+  color: #f7f0df;
   background: #102b33;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -8,17 +8,22 @@
   -moz-osx-font-smoothing: grayscale;
   font-optical-sizing: auto;
   font-weight: 400;
-  --ink: #f6f0df;
-  --muted: #a9b8b2;
-  --subtle: #c3d0c6; /* Small secondary copy on the dark UI surfaces. */
+  --ink: #f7f0df;
+  --muted: #cad6cc;
+  --subtle: #cad6cc;
   --dark: #102b33;
   --dark-raised: #173840;
-  --dark-soft: #1b4147;
-  --line: rgba(231, 236, 210, 0.13);
-  --lime: #d7e48f;
+  --dark-soft: #1f464a;
+  --line: rgba(231, 236, 210, 0.2);
+  --lime: #dce990;
   --lime-strong: #c9dc78;
   --coral: #e99976;
-  --cream: #f4ead0;
+  --cream: #f7f0df;
+  --jump: #f2c66d;
+  --jump-ink: #2d281b;
+  --slide: #a7d7d0;
+  --slide-ink: #173840;
+  --focus: #fff4c8;
   --mono: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
   color-scheme: dark;
 }
@@ -30,12 +35,14 @@
 html {
   min-width: 320px;
   scroll-behavior: smooth;
+  overflow-x: hidden;
   background: var(--dark);
 }
 
 body {
   min-width: 320px;
   margin: 0;
+  overflow-x: hidden;
   background:
     radial-gradient(ellipse at 85% 1%, rgba(78, 122, 110, 0.19), transparent 35rem),
     radial-gradient(ellipse at 0% 60%, rgba(38, 83, 80, 0.16), transparent 32rem),
@@ -53,9 +60,9 @@ button {
 
 button:focus-visible,
 a:focus-visible,
-.accessible-hints-toggle input:focus-visible {
-  outline: 3px solid var(--lime);
-  outline-offset: 4px;
+input:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
 }
 
 button:disabled {
@@ -73,7 +80,8 @@ svg {
 
 .app-shell {
   min-height: 100vh;
-  overflow: hidden;
+  min-height: 100svh;
+  overflow-x: hidden;
 }
 
 .visually-hidden {
@@ -2360,4 +2368,1129 @@ kbd {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+/* Responsive redesign: clear targets, quiet forest panels, and edge-safe controls. */
+.button,
+.text-link,
+.back-button,
+.pause-button,
+.overlay-text-button,
+.touch-button {
+  font-size: 14px;
+}
+
+.button {
+  min-height: 48px;
+}
+
+.brand,
+.header-link,
+.text-link,
+.back-button,
+.pause-button,
+.overlay-text-button {
+  min-height: 48px;
+}
+
+.brand-wordmark small,
+.eyebrow,
+.header-progress,
+.accessible-hints-toggle small,
+.hero-stat span,
+.art-card-label,
+.footer-overline,
+.landscape-caption,
+.level-chip,
+.how-to-heading span:not(.how-to-icon),
+.how-to-tip,
+.map-progress > strong small,
+.art-card-footer > div:first-child strong,
+.footer-next strong,
+.keycap,
+kbd,
+.map-progress-label,
+.all-clear-banner,
+.level-number,
+.level-region,
+.level-card-bottom,
+.level-best,
+.map-footnote,
+.site-footer,
+.game-stage-title span,
+.game-status-tag,
+.best-score span,
+.hud-label,
+.distance-row > div > span,
+.distance-row > div > strong,
+.progress-percent,
+.overlay-kicker,
+.result-summary span,
+.result-summary strong,
+.control-hint,
+.mission-card-heading,
+.mission-card > p,
+.mission-goal small,
+.mission-goal strong,
+.guide-row strong,
+.guide-row small,
+.energy-note,
+.cleared-note {
+  font-size: 12px;
+}
+
+.hero-stat span,
+.level-region,
+.map-footnote,
+.best-score span,
+.hud-label,
+.distance-row > div > span,
+.distance-row > div > strong,
+.mission-card > p,
+.mission-goal small,
+.guide-row small,
+.energy-note {
+  color: var(--subtle);
+}
+
+.hero-stat strong,
+.art-card-topline strong,
+.level-name,
+.map-progress > strong,
+.game-stage-title strong,
+.hud-score > strong,
+.energy-heading strong,
+.overlay-card > p,
+.mission-card h2,
+.guide-card h3 {
+  color: var(--ink);
+}
+
+.accessible-hints-toggle {
+  min-height: 48px;
+}
+
+.accessible-hints-toggle input {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  display: grid;
+  place-content: center;
+  margin: 0;
+  appearance: none;
+  border: 2px solid var(--subtle);
+  border-radius: 7px;
+  background: var(--dark-raised);
+  cursor: pointer;
+}
+
+.accessible-hints-toggle input::before {
+  width: 10px;
+  height: 19px;
+  border-right: 3px solid var(--dark);
+  border-bottom: 3px solid var(--dark);
+  content: '';
+  transform: rotate(45deg) scale(0);
+}
+
+.accessible-hints-toggle input:checked {
+  border-color: var(--lime);
+  background: var(--lime);
+}
+
+.accessible-hints-toggle input:checked::before {
+  transform: rotate(45deg) scale(1);
+}
+
+.level-card {
+  min-height: 172px;
+}
+
+.level-name {
+  font-size: 15px;
+}
+
+.level-lock-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  color: var(--subtle);
+  font-size: 12px;
+}
+
+.level-card-locked .level-status-locked {
+  border: 1px solid rgba(202, 214, 204, 0.35);
+}
+
+.game-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  gap: 12px;
+  background: rgba(16, 43, 51, 0.94);
+  backdrop-filter: blur(14px);
+}
+
+.game-header-best {
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+
+.game-header-best strong {
+  font-size: 15px;
+}
+
+.game-intro-row {
+  padding-block: 26px 20px;
+}
+
+.game-subtitle,
+.mission-card > p {
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.game-layout {
+  gap: 22px;
+}
+
+.game-main {
+  padding: 18px;
+  border-color: rgba(231, 236, 210, 0.2);
+  background: rgba(23, 56, 64, 0.92);
+}
+
+.hud-card {
+  min-height: 72px;
+}
+
+.hud-label {
+  font-weight: 700;
+}
+
+.hud-score > strong {
+  font-size: 20px;
+}
+
+.energy-heading strong,
+.distance-row > div > strong,
+.progress-percent {
+  font-size: 14px;
+}
+
+.distance-row {
+  margin-block: 18px 9px;
+}
+
+.game-scene {
+  border-radius: 12px;
+  border: 0;
+  box-shadow:
+    inset 0 0 0 1px rgba(231, 236, 210, 0.28),
+    0 12px 28px rgba(4, 20, 27, 0.22);
+}
+
+.scene-overlay {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding:
+    max(12px, env(safe-area-inset-top))
+    max(12px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom))
+    max(12px, env(safe-area-inset-left));
+  background: rgba(11, 31, 36, 0.74);
+}
+
+.overlay-card {
+  max-height: min(
+    760px,
+    calc(
+      100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 32px
+    )
+  );
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 28px;
+}
+
+.overlay-card h2 {
+  font-size: 26px;
+}
+
+.overlay-card > p {
+  font-size: 14px;
+}
+
+.pause-overlay-card .button {
+  min-height: 52px;
+}
+
+.overlay-text-button {
+  min-height: 48px;
+}
+
+.result-summary span {
+  font-size: 12px;
+}
+
+.result-summary strong {
+  font-size: 14px;
+}
+
+.result-actions .button {
+  min-height: 48px;
+  font-size: 14px;
+}
+
+.game-controls {
+  min-height: 76px;
+  padding-top: 12px;
+}
+
+.control-hint {
+  font-size: 14px;
+}
+
+.touch-controls {
+  gap: 10px;
+}
+
+.touch-button {
+  min-width: 128px;
+  min-height: 56px;
+  gap: 8px;
+  border-radius: 9px;
+  font-size: 15px;
+  box-shadow: 0 5px 14px rgba(3, 18, 23, 0.18);
+}
+
+.touch-button kbd {
+  border-color: currentColor;
+  color: inherit;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.touch-jump {
+  border-color: #f2c66d;
+  color: var(--jump-ink);
+  background: var(--jump);
+}
+
+.touch-jump .touch-icon {
+  color: var(--jump-ink);
+}
+
+.touch-slide {
+  border-color: #a7d7d0;
+  color: var(--slide-ink);
+  background: var(--slide);
+}
+
+.touch-slide .touch-icon {
+  color: var(--slide-ink);
+}
+
+.touch-button:disabled {
+  border-style: solid;
+  opacity: 0.72;
+}
+
+.mission-panel {
+  gap: 14px;
+}
+
+.mission-card,
+.guide-card {
+  padding: 19px;
+  border-color: rgba(231, 236, 210, 0.2);
+  background: rgba(23, 56, 64, 0.84);
+}
+
+.mission-card-heading,
+.guide-card h3 {
+  font-size: 14px;
+}
+
+.mission-card h2 {
+  font-size: 19px;
+}
+
+.mission-goal strong,
+.guide-row strong {
+  font-size: 14px;
+}
+
+.guide-row small {
+  font-size: 12px;
+}
+
+.energy-note,
+.cleared-note {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+@media (min-width: 1200px) {
+  .game-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 300px);
+    gap: 24px;
+  }
+}
+
+@media (max-width: 1199px) {
+  .game-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mission-panel {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .energy-note,
+  .cleared-note {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 767px) {
+  .site-header,
+  .game-header,
+  .page-container,
+  .game-page-container {
+    width: 100%;
+    padding-inline:
+      max(14px, env(safe-area-inset-left))
+      max(14px, env(safe-area-inset-right));
+  }
+
+  .site-header {
+    min-height: 68px;
+  }
+
+  .brand-wordmark strong {
+    font-size: 14px;
+  }
+
+  .brand-wordmark small {
+    font-size: 12px;
+  }
+
+  .header-progress {
+    font-size: 12px;
+  }
+
+  .header-link {
+    min-width: 48px;
+    min-height: 48px;
+  }
+
+  .hero-section {
+    gap: 32px;
+    padding-block: 40px 36px;
+  }
+
+  .hero-copy h1 {
+    font-size: clamp(48px, 12vw, 68px);
+  }
+
+  .hero-description {
+    font-size: 14px;
+  }
+
+  .hero-stat span {
+    font-size: 12px;
+  }
+
+  .accessible-hints-toggle {
+    padding-block: 8px;
+  }
+
+  .accessible-hints-toggle strong {
+    font-size: 14px;
+  }
+
+  .accessible-hints-toggle small {
+    font-size: 12px;
+  }
+
+  .how-to-play {
+    padding: 18px;
+  }
+
+  .how-to-heading strong,
+  .how-to-heading span:not(.how-to-icon),
+  .how-to-tip,
+  .keycap {
+    font-size: 12px;
+  }
+
+  .section-heading h2 {
+    font-size: 23px;
+  }
+
+  .level-grid {
+    gap: 10px;
+  }
+
+  .level-card {
+    min-height: 172px;
+    padding: 14px;
+  }
+
+  .level-card-bottom,
+  .level-region,
+  .level-number,
+  .level-lock-copy,
+  .level-best {
+    font-size: 12px;
+  }
+
+  .game-page {
+    min-height: 100svh;
+    padding-bottom: 0;
+  }
+
+  .game-header {
+    min-height: calc(62px + env(safe-area-inset-top));
+    justify-content: space-between;
+    gap: 4px;
+    padding-top: max(6px, env(safe-area-inset-top));
+    padding-bottom: 6px;
+  }
+
+  .back-button,
+  .pause-button {
+    min-width: 48px;
+    min-height: 48px;
+    font-size: 14px;
+  }
+
+  .back-button span:last-child,
+  .game-header-best span {
+    display: none;
+  }
+
+  .game-stage-title {
+    flex: 0 1 auto;
+    flex-direction: row;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .game-stage-title span {
+    font-size: 12px;
+  }
+
+  .game-stage-title strong {
+    max-width: 88px;
+    overflow: hidden;
+    font-size: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .game-header-best {
+    margin-left: 0;
+    gap: 4px;
+  }
+
+  .game-header-best span {
+    font-size: 12px;
+  }
+
+  .game-header-best strong {
+    font-size: 14px;
+  }
+
+  .pause-button {
+    gap: 5px;
+    padding-inline: 8px;
+  }
+
+  .pause-button kbd {
+    display: none;
+  }
+
+  .game-page-container {
+    padding-bottom: calc(100px + env(safe-area-inset-bottom));
+  }
+
+  .game-intro-row {
+    padding-block: 14px 12px;
+  }
+
+  .game-intro-row .eyebrow {
+    margin-bottom: 6px;
+  }
+
+  .game-intro-row h1 {
+    font-size: 24px;
+  }
+
+  .game-subtitle {
+    max-width: 36em;
+    margin-top: 5px;
+    font-size: 14px;
+  }
+
+  .game-main {
+    padding: 12px;
+    border-radius: 14px;
+  }
+
+  .hud-grid {
+    gap: 8px;
+  }
+
+  .hud-card {
+    min-height: 64px;
+    padding: 10px 12px;
+  }
+
+  .hud-label {
+    font-size: 12px;
+  }
+
+  .hud-score > strong {
+    font-size: 18px;
+  }
+
+  .energy-heading strong,
+  .distance-row > div > strong,
+  .progress-percent {
+    font-size: 14px;
+  }
+
+  .distance-row {
+    margin-block: 14px 8px;
+  }
+
+  .distance-row > div {
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+
+  .distance-row > div > span,
+  .distance-row > div > strong {
+    font-size: 12px;
+  }
+
+  .game-scene {
+    margin-top: 10px;
+    border-radius: 10px;
+  }
+
+  .game-controls-playing {
+    position: fixed;
+    z-index: 40;
+    right: env(safe-area-inset-right);
+    bottom: 0;
+    left: env(safe-area-inset-left);
+    display: block;
+    min-height: 0;
+    padding:
+      10px
+      max(14px, env(safe-area-inset-left))
+      calc(10px + env(safe-area-inset-bottom));
+    border-top: 1px solid rgba(231, 236, 210, 0.22);
+    background: rgba(16, 43, 51, 0.97);
+    box-shadow: 0 -12px 32px rgba(6, 22, 27, 0.3);
+    backdrop-filter: blur(16px);
+  }
+
+  .game-controls-playing .control-hint {
+    display: none;
+  }
+
+  .game-controls-playing .touch-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .game-controls-playing .touch-button {
+    min-width: 0;
+    min-height: 68px;
+    flex-direction: column;
+    gap: 0;
+    border-radius: 12px;
+    font-size: 15px;
+  }
+
+  .game-controls-playing .touch-icon {
+    font-size: 19px;
+    line-height: 1;
+  }
+
+  .game-controls-playing .touch-button kbd {
+    padding: 0;
+    border: 0;
+    font-size: 12px;
+  }
+
+  .game-controls-paused {
+    display: none;
+  }
+
+  .mission-panel {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .energy-note,
+  .cleared-note {
+    grid-column: auto;
+  }
+
+  .mission-card,
+  .guide-card {
+    padding: 16px;
+  }
+
+  .scene-overlay {
+    position: fixed;
+    z-index: 100;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding:
+      max(12px, env(safe-area-inset-top))
+      max(12px, env(safe-area-inset-right))
+      max(12px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+    background: rgba(11, 31, 36, 0.74);
+  }
+
+  .overlay-card {
+    width: min(100%, 430px);
+    max-height: calc(
+      100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 24px
+    );
+    padding: 22px 18px;
+  }
+
+  .overlay-card h2 {
+    font-size: 23px;
+  }
+
+  .overlay-card > p {
+    font-size: 14px;
+  }
+
+  .result-actions .button {
+    min-height: 48px;
+    font-size: 14px;
+  }
+}
+
+@media (max-width: 767px) and (orientation: portrait) {
+  .game-controls-playing .touch-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) and (orientation: landscape) and (max-height: 520px) {
+  .game-page {
+    min-height: 100svh;
+    padding-bottom: 0;
+  }
+
+  .game-header,
+  .game-page-container {
+    width: 100%;
+    padding-inline:
+      max(8px, env(safe-area-inset-left))
+      max(8px, env(safe-area-inset-right));
+  }
+
+  .game-header {
+    min-height: calc(50px + env(safe-area-inset-top));
+    justify-content: space-between;
+    gap: 4px;
+    padding-top: max(3px, env(safe-area-inset-top));
+    padding-bottom: 2px;
+  }
+
+  .back-button,
+  .pause-button {
+    min-height: 48px;
+    min-width: 48px;
+    padding-block: 3px;
+  }
+
+  .back-button {
+    gap: 5px;
+    font-size: 14px;
+  }
+
+  .game-stage-title {
+    gap: 5px;
+  }
+
+  .game-stage-title span {
+    padding: 4px 5px;
+    font-size: 11px;
+  }
+
+  .game-stage-title strong {
+    max-width: 104px;
+    font-size: 13px;
+  }
+
+  .game-header-best {
+    flex-direction: row;
+    gap: 4px;
+    margin-left: 0;
+  }
+
+  .game-header-best span {
+    font-size: 11px;
+  }
+
+  .game-header-best strong {
+    font-size: 13px;
+  }
+
+  .pause-button {
+    min-width: 48px;
+    gap: 4px;
+    font-size: 12px;
+  }
+
+  .game-page-container {
+    padding:
+      2px
+      max(8px, env(safe-area-inset-right))
+      max(4px, env(safe-area-inset-bottom))
+      max(8px, env(safe-area-inset-left));
+  }
+
+  .game-intro-row {
+    display: none;
+  }
+
+  .game-layout {
+    display: block;
+  }
+
+  .game-main {
+    display: grid;
+    grid-template-columns: minmax(48px, 56px) minmax(0, 1fr) minmax(48px, 56px);
+    grid-template-rows: auto auto auto auto;
+    align-items: center;
+    gap: 2px 6px;
+    padding: 6px;
+  }
+
+  .hud-grid {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    grid-template-columns: 0.9fr 1.1fr;
+    gap: 6px;
+  }
+
+  .hud-card {
+    min-height: 34px;
+    padding: 3px 8px;
+    border-radius: 7px;
+  }
+
+  .hud-label {
+    font-size: 12px;
+  }
+
+  .hud-score > strong {
+    margin-top: 0;
+    font-size: 14px;
+  }
+
+  .energy-heading {
+    padding-right: 18px;
+  }
+
+  .energy-heading strong {
+    font-size: 12px;
+  }
+
+  .energy-track {
+    height: 4px;
+    margin-top: 3px;
+  }
+
+  .hud-symbol {
+    top: 5px;
+    right: 7px;
+    font-size: 11px;
+  }
+
+  .distance-row {
+    grid-column: 2;
+    grid-row: 2;
+    margin: 1px 0;
+    align-items: center;
+  }
+
+  .distance-row > div {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  .distance-row > div > span,
+  .distance-row > div > strong,
+  .progress-percent {
+    font-size: 12px;
+  }
+
+  .run-progress-track {
+    grid-column: 2;
+    grid-row: 3;
+    height: 3px;
+  }
+
+  .game-scene {
+    grid-column: 2;
+    grid-row: 4;
+    min-width: 0;
+    margin: 0;
+    border-radius: 8px;
+  }
+
+  .game-controls {
+    position: static;
+    grid-column: 1 / -1;
+    grid-row: 4;
+    display: grid;
+    grid-template-columns: inherit;
+    align-self: stretch;
+    min-height: 0;
+    gap: 0 6px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+
+  .game-controls-paused {
+    display: none;
+  }
+
+  .game-controls .control-hint {
+    display: none;
+  }
+
+  .game-controls .touch-controls {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    display: grid;
+    grid-template-columns: inherit;
+    gap: 0 6px;
+  }
+
+  .game-controls .touch-button {
+    z-index: 2;
+    grid-row: 1;
+    align-self: center;
+    width: 100%;
+    min-width: 48px;
+    min-height: 64px;
+    max-height: 76px;
+    flex-direction: column;
+    gap: 1px;
+    padding: 3px;
+    border-radius: 12px;
+    font-size: 14px;
+  }
+
+  .game-controls .touch-icon {
+    font-size: 19px;
+  }
+
+  .game-controls .touch-button kbd {
+    display: none;
+  }
+
+  .game-controls .touch-jump {
+    grid-column: 1;
+  }
+
+  .game-controls .touch-slide {
+    grid-column: 3;
+  }
+
+  .mission-panel {
+    display: none;
+  }
+
+  .scene-overlay {
+    position: fixed;
+    z-index: 100;
+    inset: 0;
+    overflow-y: auto;
+    padding:
+      max(6px, env(safe-area-inset-top))
+      max(6px, env(safe-area-inset-right))
+      max(6px, env(safe-area-inset-bottom))
+      max(6px, env(safe-area-inset-left));
+  }
+
+  .overlay-card {
+    width: min(100%, 460px);
+    max-height: calc(
+      100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 12px
+    );
+    padding: 12px 16px;
+  }
+
+  .pause-overlay-card .button {
+    position: sticky;
+    bottom: 0;
+    min-height: 48px;
+    margin-top: 12px;
+  }
+
+  .overlay-text-button {
+    margin-top: 4px;
+  }
+
+  .result-emblem {
+    width: 32px;
+    height: 32px;
+    margin-bottom: 4px;
+  }
+
+  .overlay-card h2 {
+    margin-block: 4px;
+    font-size: 20px;
+  }
+
+  .overlay-card > p {
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .result-summary {
+    margin-top: 8px;
+    padding-block: 7px;
+  }
+
+  .result-actions {
+    position: sticky;
+    bottom: -12px;
+    padding-block: 6px 2px;
+    background: rgba(17, 47, 53, 0.98);
+  }
+
+  .result-actions .button,
+  .result-actions .overlay-text-button {
+    min-height: 48px;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 900px) and (orientation: landscape) and (max-height: 420px) {
+  .game-scene {
+    width: min(100%, 576px);
+    justify-self: center;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .button:hover,
+  .touch-button:hover:not(:disabled) {
+    transform: translateY(-2px);
+  }
+}
+
+@media (hover: none) {
+  .button:hover,
+  .level-card:not(:disabled):hover,
+  .touch-button:hover:not(:disabled),
+  .header-link:hover,
+  .text-link:hover,
+  .overlay-text-button:hover {
+    transform: none;
+  }
+
+  .button-primary:hover {
+    color: #233c37;
+    background: var(--lime);
+    box-shadow: 0 8px 20px rgba(174, 195, 103, 0.12);
+  }
+
+  .button-secondary:hover {
+    border-color: rgba(231, 236, 210, 0.24);
+    background: rgba(21, 52, 59, 0.9);
+  }
+
+  .touch-jump:hover:not(:disabled) {
+    border-color: #f2c66d;
+    background: var(--jump);
+  }
+
+  .touch-slide:hover:not(:disabled) {
+    border-color: #a7d7d0;
+    background: var(--slide);
+  }
+
+  .level-card:not(:disabled):hover {
+    background-color: rgba(24, 56, 62, 0.76);
+    border-color: rgba(226, 237, 201, 0.13);
+  }
+
+  .level-card-selected:not(:disabled):hover {
+    border-color: color-mix(in srgb, var(--level-accent) 72%, transparent);
+  }
+
+  .header-link:hover,
+  .text-link:hover {
+    gap: 8px;
+    color: var(--lime);
+  }
+
+  .back-button:hover,
+  .pause-button:hover:not(:disabled) {
+    color: #c3d0c6;
+  }
+
+  .overlay-text-button:hover {
+    color: #a6b7aa;
+  }
+}
+
+.touch-button:active:not(:disabled),
+.button:active,
+.pause-button:active,
+.back-button:active {
+  transform: scale(0.98);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button:hover,
+  .level-card:not(:disabled):hover,
+  .touch-button:hover:not(:disabled) {
+    transform: none;
+  }
+
+  .touch-button:active:not(:disabled),
+  .button:active,
+  .pause-button:active,
+  .back-button:active {
+    transform: none;
+  }
+}
+
+.game-main:focus-visible,
+#level-map h2:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
 }

@@ -7,6 +7,10 @@ import {
   type Obstacle,
   type Pickup,
 } from './engine';
+import {
+  getRunnerAnimationPose,
+  RUNNER_FRAME_COUNT,
+} from './runnerAnimation';
 import type { SpriteFrame } from './sprites';
 
 function drawCloud(
@@ -51,7 +55,11 @@ function drawRollingHill(
   context.fill();
 }
 
-function drawBackground(context: CanvasRenderingContext2D, state: GameState): void {
+function drawBackground(
+  context: CanvasRenderingContext2D,
+  state: GameState,
+  reduceMotion: boolean,
+): void {
   const { palette } = state.level;
   const sky = context.createLinearGradient(0, 0, 0, WORLD_HEIGHT);
   sky.addColorStop(0, palette.skyTop);
@@ -59,7 +67,7 @@ function drawBackground(context: CanvasRenderingContext2D, state: GameState): vo
   context.fillStyle = sky;
   context.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
-  const sunX = 760 - ((state.distance * 0.035) % 1_260);
+  const sunX = reduceMotion ? 760 : 760 - ((state.distance * 0.035) % 1_260);
   context.save();
   context.globalAlpha = 0.78;
   context.fillStyle = palette.sun;
@@ -68,7 +76,7 @@ function drawBackground(context: CanvasRenderingContext2D, state: GameState): vo
   context.fill();
   context.restore();
 
-  const cloudOffset = (state.distance * 0.055) % 1_200;
+  const cloudOffset = reduceMotion ? 0 : (state.distance * 0.055) % 1_200;
   drawCloud(context, 110 - cloudOffset, 88, 0.75, 'rgba(255,255,255,0.65)');
   drawCloud(context, 490 - cloudOffset * 0.76, 128, 0.52, 'rgba(255,255,255,0.5)');
   drawCloud(context, 920 - cloudOffset * 0.6, 68, 0.62, 'rgba(255,255,255,0.55)');
@@ -76,7 +84,7 @@ function drawBackground(context: CanvasRenderingContext2D, state: GameState): vo
   drawRollingHill(
     context,
     palette.backHill,
-    (state.distance * 0.13) % 1_200,
+    reduceMotion ? 0 : (state.distance * 0.13) % 1_200,
     21,
     GROUND_Y - 84,
     115,
@@ -84,7 +92,7 @@ function drawBackground(context: CanvasRenderingContext2D, state: GameState): vo
   drawRollingHill(
     context,
     palette.frontHill,
-    (state.distance * 0.24) % 1_200,
+    reduceMotion ? 0 : (state.distance * 0.24) % 1_200,
     15,
     GROUND_Y - 37,
     92,
@@ -220,8 +228,13 @@ function drawObstacle(context: CanvasRenderingContext2D, obstacle: Obstacle): vo
   }
 }
 
-function drawPickup(context: CanvasRenderingContext2D, pickup: Pickup, elapsed: number): void {
-  const bob = Math.sin(elapsed * 5 + pickup.id) * 4;
+function drawPickup(
+  context: CanvasRenderingContext2D,
+  pickup: Pickup,
+  elapsed: number,
+  reduceMotion: boolean,
+): void {
+  const bob = reduceMotion ? 0 : Math.sin(elapsed * 5 + pickup.id) * 4;
   const y = pickup.y + bob;
   context.save();
   context.shadowColor = '#fff4ad';
@@ -257,12 +270,25 @@ function drawRunner(
   context: CanvasRenderingContext2D,
   state: GameState,
   frames: SpriteFrame[] | null,
+  reduceMotion: boolean,
 ): void {
   const jumping = state.player.jumpHeight > 0;
   const sliding = state.player.slideRemaining > 0;
-  const shadowScale = Math.max(0.42, 1 - state.player.jumpHeight / 220);
+  const pose = getRunnerAnimationPose(
+    state.elapsed,
+    frames?.length ?? RUNNER_FRAME_COUNT,
+    reduceMotion,
+  );
+  const contactScale =
+    !jumping && !sliding && !reduceMotion
+      ? 0.96 + pose.contactStrength * 0.08
+      : 1;
+  const shadowScale = Math.max(
+    0.42,
+    1 - state.player.jumpHeight / 220,
+  ) * contactScale;
   context.save();
-  context.globalAlpha = 0.22;
+  context.globalAlpha = jumping ? 0.18 : 0.2 + pose.contactStrength * 0.04;
   context.fillStyle = '#273b3b';
   context.beginPath();
   context.ellipse(
@@ -277,13 +303,22 @@ function drawRunner(
   context.fill();
   context.restore();
 
+  drawWindStreaks(context, state, pose, jumping, sliding, reduceMotion);
+
   const frame =
     frames && frames.length > 0
-      ? frames[Math.floor(state.elapsed * 13) % frames.length]
+      ? frames[pose.frameIndex]
       : undefined;
   if (!frame) {
-    drawFallbackRunner(context, state, sliding);
+    drawFallbackRunner(context, state, sliding, pose, reduceMotion);
+    drawFootstepDust(context, pose, jumping, sliding, reduceMotion);
     return;
+  }
+
+  const baseline =
+    GROUND_Y - state.player.jumpHeight + (jumping ? 0 : pose.bobOffset);
+  if (!jumping && !sliding && !reduceMotion) {
+    drawRunnerStrideFeet(context, pose, baseline);
   }
 
   context.save();
@@ -296,14 +331,17 @@ function drawRunner(
     const scale = Math.min(maxWidth / frame.width, maxHeight / frame.height);
     const width = frame.width * scale;
     const height = frame.height * scale;
-    const x = PLAYER_CENTER_X - width / 2;
-    const y = GROUND_Y - height - state.player.jumpHeight;
-    context.drawImage(frame, x, y, width, height);
+    const impact = jumping || reduceMotion ? 0 : pose.contactStrength;
+    context.translate(PLAYER_CENTER_X, baseline);
+    context.scale(1 + impact * 0.025, 1 - impact * 0.04);
+    context.drawImage(frame, -width / 2, -height, width, height);
   }
 
   context.restore();
 
-  if (jumping) {
+  drawFootstepDust(context, pose, jumping, sliding, reduceMotion);
+
+  if (jumping && !reduceMotion) {
     context.save();
     context.globalAlpha = 0.28;
     context.fillStyle = '#fff4d4';
@@ -315,38 +353,212 @@ function drawRunner(
   }
 }
 
+function drawRunnerStrideFeet(
+  context: CanvasRenderingContext2D,
+  pose: ReturnType<typeof getRunnerAnimationPose>,
+  baseline: number,
+): void {
+  context.save();
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  context.strokeStyle = '#544a42';
+  context.lineWidth = 3.5;
+
+  for (const foot of ['left', 'right'] as const) {
+    const direction = foot === 'left' ? -1 : 1;
+    const swing = pose.stride * 15;
+    const planted =
+      pose.contactFoot === foot && pose.contactStrength > 0.7;
+    const lift = planted ? 0 : 4 + Math.abs(pose.stride) * 4;
+    const hipX = PLAYER_CENTER_X + direction * 9;
+    const kneeX = hipX + swing * 0.35;
+    const footX = PLAYER_CENTER_X + direction * 13 + swing * 0.55;
+    const footY = baseline - lift;
+
+    context.beginPath();
+    context.moveTo(hipX, baseline - 11);
+    context.quadraticCurveTo(kneeX, baseline - 6, footX, footY - 2);
+    context.stroke();
+
+    context.fillStyle = '#77675b';
+    context.strokeStyle = '#514941';
+    context.lineWidth = 1.25;
+    context.beginPath();
+    context.ellipse(footX + 2, footY - 1, 7, 3.5, -0.12, 0, Math.PI * 2);
+    context.fill();
+    context.stroke();
+    context.strokeStyle = '#544a42';
+    context.lineWidth = 3.5;
+  }
+
+  context.restore();
+}
+
 function drawFallbackRunner(
   context: CanvasRenderingContext2D,
   state: GameState,
   sliding: boolean,
+  pose: ReturnType<typeof getRunnerAnimationPose>,
+  reduceMotion: boolean,
 ): void {
   const height = sliding ? 67 : 106;
   const width = sliding ? 104 : 84;
   const x = PLAYER_CENTER_X - width / 2;
-  const y = GROUND_Y - height - state.player.jumpHeight;
+  const baseline =
+    GROUND_Y -
+    state.player.jumpHeight +
+    (sliding || state.player.jumpHeight > 0 ? 0 : pose.bobOffset);
   context.save();
+
   context.fillStyle = '#f6ead6';
   context.strokeStyle = '#434348';
   context.lineWidth = 7;
+  const compression = !sliding && !reduceMotion ? pose.contactStrength * 0.04 : 0;
+  context.save();
+  context.translate(PLAYER_CENTER_X, baseline);
+  context.scale(1 + compression * 0.5, 1 - compression);
   context.beginPath();
-  context.ellipse(x + width / 2, y + height / 2, width / 2, height / 2, -0.16, 0, Math.PI * 2);
+  context.ellipse(0, -height / 2, width / 2, height / 2, -0.16, 0, Math.PI * 2);
   context.fill();
   context.stroke();
   context.fillStyle = '#262a2d';
   context.beginPath();
-  context.ellipse(x + width * 0.38, y + height * 0.39, width * 0.33, height * 0.38, 0, 0, Math.PI * 2);
+  context.ellipse(-width * 0.12, -height * 0.61, width * 0.33, height * 0.38, 0, 0, Math.PI * 2);
   context.fill();
   context.fillStyle = '#fff9e9';
   context.beginPath();
-  context.arc(x + width * 0.69, y + height * 0.32, 8, 0, Math.PI * 2);
+  context.arc(width * 0.19, -height * 0.68, 8, 0, Math.PI * 2);
   context.fill();
   context.fillStyle = '#cf9571';
   context.beginPath();
-  context.moveTo(x + width * 0.86, y + height * 0.42);
-  context.lineTo(x + width + 12, y + height * 0.5);
-  context.lineTo(x + width * 0.83, y + height * 0.58);
+  context.moveTo(width * 0.36, -height * 0.58);
+  context.lineTo(width * 0.65, -height * 0.5);
+  context.lineTo(width * 0.34, -height * 0.42);
   context.closePath();
   context.fill();
+  context.restore();
+
+  context.save();
+  context.fillStyle = '#35383a';
+  if (!sliding) {
+    const stride = reduceMotion ? 0 : pose.stride;
+    context.strokeStyle = '#35383a';
+    context.lineWidth = 6;
+    context.lineCap = 'round';
+
+    for (const foot of ['left', 'right'] as const) {
+      const direction = foot === 'left' ? -1 : 1;
+      const swing = stride * direction * 18;
+      const planted =
+        pose.contactFoot === foot && pose.contactStrength > 0.7;
+      const lift =
+        planted || reduceMotion ? 0 : Math.abs(swing) * 0.45 + 3;
+      const hipX = PLAYER_CENTER_X + direction * 9;
+      const kneeX = hipX + swing * 0.5;
+      const footX = PLAYER_CENTER_X + direction * 18 + swing;
+      const footY = baseline - lift;
+
+      context.beginPath();
+      context.moveTo(hipX, baseline - 29);
+      context.quadraticCurveTo(kneeX, baseline - 13, footX, footY - 3);
+      context.stroke();
+      context.beginPath();
+      context.ellipse(
+        footX + 5,
+        footY - 2,
+        11,
+        5.5,
+        -0.12,
+        0,
+        Math.PI * 2,
+      );
+      context.fill();
+    }
+  } else {
+    context.beginPath();
+    context.ellipse(
+      x + width * 0.36,
+      baseline - 2,
+      12,
+      5,
+      -0.28,
+      0,
+      Math.PI * 2,
+    );
+    context.ellipse(
+      x + width * 0.68,
+      baseline - 2,
+      12,
+      5,
+      0.18,
+      0,
+      Math.PI * 2,
+    );
+    context.fill();
+  }
+
+  context.restore();
+  context.restore();
+}
+
+function drawWindStreaks(
+  context: CanvasRenderingContext2D,
+  state: GameState,
+  pose: ReturnType<typeof getRunnerAnimationPose>,
+  jumping: boolean,
+  sliding: boolean,
+  reduceMotion: boolean,
+): void {
+  if (reduceMotion || jumping || sliding) {
+    return;
+  }
+
+  context.save();
+  context.globalAlpha = 0.22;
+  context.strokeStyle = '#fff4d4';
+  context.lineWidth = 3.5;
+  context.lineCap = 'round';
+
+  for (let index = 0; index < 3; index += 1) {
+    const drift = (state.elapsed * 92 + index * 27) % 54;
+    const y = GROUND_Y - 60 + index * 16 + pose.bobOffset * 0.35;
+    const x = PLAYER_CENTER_X - 55 - drift;
+    context.beginPath();
+    context.moveTo(x, y);
+    context.lineTo(x + 24 + index * 3, y - 2);
+    context.stroke();
+  }
+
+  context.restore();
+}
+
+function drawFootstepDust(
+  context: CanvasRenderingContext2D,
+  pose: ReturnType<typeof getRunnerAnimationPose>,
+  jumping: boolean,
+  sliding: boolean,
+  reduceMotion: boolean,
+): void {
+  if (reduceMotion || jumping || sliding || pose.contactStrength <= 0) {
+    return;
+  }
+
+  const direction = pose.contactFoot === 'left' ? -1 : 1;
+  const centerX = PLAYER_CENTER_X + direction * 17;
+  const alpha = pose.contactStrength * 0.52;
+  context.save();
+  context.fillStyle = `rgba(255, 244, 212, ${alpha})`;
+
+  for (let index = 0; index < 3; index += 1) {
+    const spread = (1 - pose.contactStrength) * (index + 2);
+    const x = centerX - 7 + index * 6 - spread;
+    const y = GROUND_Y - 1 - spread * (index + 1) * 0.35;
+    const radius = 3 + pose.contactStrength * 0.9 - index * 0.35;
+    context.beginPath();
+    context.arc(x, y, radius, 0, Math.PI * 2);
+    context.fill();
+  }
+
   context.restore();
 }
 
@@ -354,18 +566,19 @@ export function drawGameScene(
   context: CanvasRenderingContext2D,
   state: GameState,
   frames: SpriteFrame[] | null,
+  reduceMotion = false,
 ): void {
   context.clearRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-  drawBackground(context, state);
+  drawBackground(context, state, reduceMotion);
 
   for (const pickup of state.pickups) {
-    drawPickup(context, pickup, state.elapsed);
+    drawPickup(context, pickup, state.elapsed, reduceMotion);
   }
   for (const obstacle of state.obstacles) {
     drawObstacle(context, obstacle);
   }
 
-  drawRunner(context, state, frames);
+  drawRunner(context, state, frames, reduceMotion);
 
   context.fillStyle = 'rgba(255,255,255,0.16)';
   context.fillRect(0, WORLD_HEIGHT - 2, WORLD_WIDTH, 2);

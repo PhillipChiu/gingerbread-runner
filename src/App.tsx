@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import CharacterPreview from './components/CharacterPreview';
 import GameCanvas, { type ActionRequest } from './components/GameCanvas';
 import {
@@ -110,6 +117,11 @@ function App() {
   const [outcome, setOutcome] = useState<'won' | 'lost' | null>(null);
   const [accessibleHintsEnabled, setAccessibleHintsEnabled] = useState(false);
   const actionIdRef = useRef(0);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogPrimaryRef = useRef<HTMLButtonElement>(null);
+  const gameRegionRef = useRef<HTMLElement>(null);
+  const mapHeadingRef = useRef<HTMLHeadingElement>(null);
+  const previousScreenRef = useRef<Screen>('menu');
 
   const activeLevel = getLevel(activeLevelId);
   const selectedLevel = getLevel(selectedLevelId);
@@ -118,6 +130,18 @@ function App() {
   useEffect(() => {
     writeProgress(progress);
   }, [progress]);
+
+  useLayoutEffect(() => {
+    const previousScreen = previousScreenRef.current;
+    if (screen === 'paused' || screen === 'result') {
+      dialogPrimaryRef.current?.focus();
+    } else if (screen === 'playing' && previousScreen !== 'playing') {
+      gameRegionRef.current?.focus({ preventScroll: true });
+    } else if (screen === 'menu' && previousScreen !== 'menu') {
+      mapHeadingRef.current?.focus();
+    }
+    previousScreenRef.current = screen;
+  }, [screen]);
 
   const startLevel = (levelId: number): void => {
     const level = getLevel(levelId);
@@ -160,6 +184,44 @@ function App() {
     }
   };
 
+  const handleDialogKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === 'Escape') {
+      if (screen === 'paused') {
+        event.preventDefault();
+        togglePause();
+      }
+      return;
+    }
+
+    if (event.key !== 'Tab') {
+      return;
+    }
+
+    const dialog = dialogRef.current;
+    const focusableElements = dialog?.querySelectorAll<HTMLElement>(
+      'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])',
+    );
+    if (!dialog || !focusableElements?.length) {
+      event.preventDefault();
+      return;
+    }
+
+    const first = focusableElements[0]!;
+    const last = focusableElements[focusableElements.length - 1]!;
+    const focusIsInsideDialog = dialog.contains(document.activeElement);
+
+    if (event.shiftKey && (document.activeElement === first || !focusIsInsideDialog)) {
+      event.preventDefault();
+      last.focus();
+    } else if (
+      !event.shiftKey &&
+      (document.activeElement === last || !focusIsInsideDialog)
+    ) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   const finishRun = (finalState: GameState): void => {
     const cleared = finalState.status === 'won';
     const nextProgress = recordRun(
@@ -181,7 +243,7 @@ function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (isInteractiveKeyboardTarget(event.target)) {
+      if (event.defaultPrevented) {
         return;
       }
 
@@ -191,6 +253,14 @@ function App() {
           event.preventDefault();
           togglePause();
         }
+        return;
+      }
+
+      const interactiveTarget = isInteractiveKeyboardTarget(event.target);
+      if (
+        interactiveTarget &&
+        (event.code === 'Space' || key === ' ' || key === 'enter')
+      ) {
         return;
       }
 
@@ -230,7 +300,7 @@ function App() {
             <a className="brand" href="#top" aria-label="雲尾衝刺日記首頁">
               <BrandMark />
               <span className="brand-wordmark">
-                <strong>雲尾衝刺</strong>
+                <strong>雲尾衝刺日記</strong>
                 <small>TALE OF TINY TRAILS</small>
               </span>
             </a>
@@ -384,7 +454,9 @@ function App() {
                     <span className="eyebrow-line" />
                     旅程地圖
                   </p>
-                  <h2>十段步道，越跑越遠。</h2>
+                  <h2 ref={mapHeadingRef} tabIndex={-1}>
+                    十段步道，越跑越遠。
+                  </h2>
                 </div>
                 <div className="map-progress">
                   <span className="map-progress-label">旅程進度</span>
@@ -419,6 +491,7 @@ function App() {
                       style={accentStyle}
                       disabled={locked}
                       onClick={() => setSelectedLevelId(level.id)}
+                      aria-pressed={active}
                       aria-label={
                         locked
                           ? `第 ${level.id} 關 ${level.name}，尚未解鎖`
@@ -437,6 +510,9 @@ function App() {
                       </div>
                       <strong className="level-name">{level.name}</strong>
                       <span className="level-region">{level.region}</span>
+                      {locked && (
+                        <span className="level-lock-copy">尚未解鎖</span>
+                      )}
                       <span className="level-card-bottom">
                         <span>{formatMeters(level.distanceGoal)}</span>
                         <span className="difficulty-dots" aria-label={`難度 ${level.difficulty} / 5`}>
@@ -466,13 +542,26 @@ function App() {
       ) : (
         <div className="game-page">
           <header className="game-header">
-            <button className="back-button" type="button" onClick={returnToMenu}>
+            <button
+              className="back-button"
+              type="button"
+              aria-label="返回旅程地圖"
+              onClick={returnToMenu}
+            >
               <span className="back-arrow">←</span>
               <span>旅程地圖</span>
             </button>
             <div className="game-stage-title">
               <span>STAGE {String(activeLevel.id).padStart(2, '0')}</span>
               <strong>{activeLevel.name}</strong>
+            </div>
+            <div
+              className="best-score game-header-best"
+              role="group"
+              aria-label={`本關最佳分數 ${formatNumber(progress.bestScores[activeLevel.id] ?? 0)}`}
+            >
+              <span>本關最佳</span>
+              <strong>{formatNumber(progress.bestScores[activeLevel.id] ?? 0)}</strong>
             </div>
             {screen === 'result' ? (
               <span className={`game-status-tag ${outcome === 'won' ? 'status-success' : 'status-failure'}`}>
@@ -501,14 +590,15 @@ function App() {
                 <h1>{activeLevel.name}</h1>
                 <p className="game-subtitle">{activeLevel.description}</p>
               </div>
-              <div className="best-score">
-                <span>本關最佳</span>
-                <strong>{formatNumber(progress.bestScores[activeLevel.id] ?? 0)}</strong>
-              </div>
             </div>
 
             <div className="game-layout">
-              <section className="game-main" aria-label="遊戲區">
+              <section
+                className="game-main"
+                aria-label="遊戲區"
+                ref={gameRegionRef}
+                tabIndex={-1}
+              >
                 <div className="hud-grid">
                   <div className="hud-card hud-score">
                     <span className="hud-label">星光分數</span>
@@ -520,7 +610,14 @@ function App() {
                       <span className="hud-label">體力</span>
                       <strong>{Math.round(snapshot.energy)}%</strong>
                     </div>
-                    <div className="energy-track" aria-label={`剩餘體力 ${Math.round(snapshot.energy)}%`}>
+                    <div
+                      className="energy-track"
+                      role="progressbar"
+                      aria-label="剩餘體力"
+                      aria-valuenow={Math.round(snapshot.energy)}
+                      aria-valuemin={0}
+                      aria-valuemax={CUSTOM_GAME_TUNING.startingEnergy}
+                    >
                       <span style={{ width: `${Math.max(0, Math.min(100, snapshot.energy))}%` }} />
                     </div>
                     <span className="hud-symbol energy-symbol">✦</span>
@@ -558,12 +655,24 @@ function App() {
                   />
 
                   {screen === 'paused' && (
-                    <div className="scene-overlay">
+                    <div
+                      className="scene-overlay"
+                      role="dialog"
+                      aria-modal="true"
+                      aria-labelledby="game-dialog-title"
+                      ref={dialogRef}
+                      onKeyDown={handleDialogKeyDown}
+                    >
                       <div className="overlay-card pause-overlay-card">
                         <span className="overlay-kicker">先歇一會兒</span>
-                        <h2>旅程暫停中</h2>
+                        <h2 id="game-dialog-title">旅程暫停中</h2>
                         <p>喝口水，準備好再繼續向前。</p>
-                        <button className="button button-primary" type="button" onClick={togglePause}>
+                        <button
+                          ref={dialogPrimaryRef}
+                          className="button button-primary"
+                          type="button"
+                          onClick={togglePause}
+                        >
                           <PlayIcon /> 繼續奔跑
                         </button>
                         <button className="overlay-text-button" type="button" onClick={() => startLevel(activeLevel.id)}>
@@ -574,7 +683,14 @@ function App() {
                   )}
 
                   {screen === 'result' && (
-                    <div className="scene-overlay">
+                    <div
+                      className="scene-overlay"
+                      role="dialog"
+                      aria-modal="true"
+                      aria-labelledby="game-dialog-title"
+                      ref={dialogRef}
+                      onKeyDown={handleDialogKeyDown}
+                    >
                       <div className={`overlay-card result-overlay-card ${outcome === 'won' ? 'result-win' : 'result-loss'}`}>
                         <span className={`result-emblem ${outcome === 'won' ? 'emblem-win' : 'emblem-loss'}`}>
                           {outcome === 'won' ? '✦' : '…'}
@@ -582,7 +698,9 @@ function App() {
                         <span className="overlay-kicker">
                           {outcome === 'won' ? '步道完成' : '旅程結算'}
                         </span>
-                        <h2>{outcome === 'won' ? '跑得真棒！' : '休息一下，再試一次'}</h2>
+                        <h2 id="game-dialog-title">
+                          {outcome === 'won' ? '跑得真棒！' : '休息一下，再試一次'}
+                        </h2>
                         <p>
                           {outcome === 'won'
                             ? activeLevel.id < LEVELS.length
@@ -598,6 +716,7 @@ function App() {
                         <div className="result-actions">
                           {outcome === 'won' && activeLevel.id < LEVELS.length && (
                             <button
+                              ref={dialogPrimaryRef}
                               className="button button-primary"
                               type="button"
                               onClick={() => startLevel(activeLevel.id + 1)}
@@ -606,6 +725,11 @@ function App() {
                             </button>
                           )}
                           <button
+                            ref={
+                              outcome === 'won' && activeLevel.id < LEVELS.length
+                                ? undefined
+                                : dialogPrimaryRef
+                            }
                             className={`button ${outcome === 'won' && activeLevel.id < LEVELS.length ? 'button-secondary' : 'button-primary'}`}
                             type="button"
                             onClick={() => startLevel(activeLevel.id)}
@@ -622,7 +746,7 @@ function App() {
                 </div>
 
                 {screen !== 'result' && (
-                  <div className="game-controls">
+                  <div className={`game-controls game-controls-${screen}`}>
                     <div className="control-hint">
                       <span className="control-hint-dot" />
                       <span>
@@ -633,26 +757,28 @@ function App() {
                             : '自動向前奔跑'}
                       </span>
                     </div>
-                    <div className="touch-controls" aria-label="觸控操作">
-                      <button
-                        className="touch-button touch-slide"
-                        type="button"
-                        onClick={() => sendAction('slide')}
-                        disabled={screen !== 'playing'}
-                      >
-                        <span className="touch-icon">⌄</span>
-                        <span>滑行</span>
-                        <kbd>↓</kbd>
-                      </button>
+                    <div className="touch-controls" role="group" aria-label="遊戲操作">
                       <button
                         className="touch-button touch-jump"
                         type="button"
+                        aria-label="跳躍（Space、向上鍵或 W）"
                         onClick={() => sendAction('jump')}
                         disabled={screen !== 'playing'}
                       >
                         <span className="touch-icon">⌃</span>
                         <span>跳躍</span>
-                        <kbd>空白</kbd>
+                        <kbd>Space / ↑ / W</kbd>
+                      </button>
+                      <button
+                        className="touch-button touch-slide"
+                        type="button"
+                        aria-label="滑行（向下鍵或 S）"
+                        onClick={() => sendAction('slide')}
+                        disabled={screen !== 'playing'}
+                      >
+                        <span className="touch-icon">⌄</span>
+                        <span>滑行</span>
+                        <kbd>↓ / S</kbd>
                       </button>
                     </div>
                   </div>
