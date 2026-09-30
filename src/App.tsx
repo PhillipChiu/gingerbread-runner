@@ -117,9 +117,10 @@ function App() {
   const [outcome, setOutcome] = useState<'won' | 'lost' | null>(null);
   const [accessibleHintsEnabled, setAccessibleHintsEnabled] = useState(false);
   const actionIdRef = useRef(0);
-  const pauseButtonRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const dialogPrimaryRef = useRef<HTMLButtonElement>(null);
+  const gameRegionRef = useRef<HTMLElement>(null);
+  const mapHeadingRef = useRef<HTMLHeadingElement>(null);
   const previousScreenRef = useRef<Screen>('menu');
 
   const activeLevel = getLevel(activeLevelId);
@@ -135,7 +136,9 @@ function App() {
     if (screen === 'paused' || screen === 'result') {
       dialogPrimaryRef.current?.focus();
     } else if (screen === 'playing' && previousScreen !== 'playing') {
-      pauseButtonRef.current?.focus();
+      gameRegionRef.current?.focus();
+    } else if (screen === 'menu' && previousScreen !== 'menu') {
+      mapHeadingRef.current?.focus();
     }
     previousScreenRef.current = screen;
   }, [screen]);
@@ -451,7 +454,9 @@ function App() {
                     <span className="eyebrow-line" />
                     旅程地圖
                   </p>
-                  <h2>十段步道，越跑越遠。</h2>
+                  <h2 ref={mapHeadingRef} tabIndex={-1}>
+                    十段步道，越跑越遠。
+                  </h2>
                 </div>
                 <div className="map-progress">
                   <span className="map-progress-label">旅程進度</span>
@@ -564,7 +569,6 @@ function App() {
               </span>
             ) : (
               <button
-                ref={pauseButtonRef}
                 className="pause-button"
                 type="button"
                 onClick={togglePause}
@@ -589,7 +593,12 @@ function App() {
             </div>
 
             <div className="game-layout">
-              <section className="game-main" aria-label="遊戲區">
+              <section
+                className="game-main"
+                aria-label="遊戲區"
+                ref={gameRegionRef}
+                tabIndex={-1}
+              >
                 <div className="hud-grid">
                   <div className="hud-card hud-score">
                     <span className="hud-label">星光分數</span>

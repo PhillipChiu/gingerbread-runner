@@ -315,6 +315,12 @@ function drawRunner(
     return;
   }
 
+  const baseline =
+    GROUND_Y - state.player.jumpHeight + (jumping ? 0 : pose.bobOffset);
+  if (!jumping && !sliding && !reduceMotion) {
+    drawRunnerStrideFeet(context, pose, baseline);
+  }
+
   context.save();
 
   if (sliding) {
@@ -325,8 +331,6 @@ function drawRunner(
     const scale = Math.min(maxWidth / frame.width, maxHeight / frame.height);
     const width = frame.width * scale;
     const height = frame.height * scale;
-    const baseline =
-      GROUND_Y - state.player.jumpHeight + (jumping ? 0 : pose.bobOffset);
     const impact = jumping || reduceMotion ? 0 : pose.contactStrength;
     context.translate(PLAYER_CENTER_X, baseline);
     context.scale(1 + impact * 0.025, 1 - impact * 0.04);
@@ -347,6 +351,47 @@ function drawRunner(
     context.fill();
     context.restore();
   }
+}
+
+function drawRunnerStrideFeet(
+  context: CanvasRenderingContext2D,
+  pose: ReturnType<typeof getRunnerAnimationPose>,
+  baseline: number,
+): void {
+  context.save();
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  context.strokeStyle = '#544a42';
+  context.lineWidth = 3.5;
+
+  for (const foot of ['left', 'right'] as const) {
+    const direction = foot === 'left' ? -1 : 1;
+    const swing = pose.stride * 15;
+    const planted =
+      pose.contactFoot === foot && pose.contactStrength > 0.7;
+    const lift = planted ? 0 : 4 + Math.abs(pose.stride) * 4;
+    const hipX = PLAYER_CENTER_X + direction * 9;
+    const kneeX = hipX + swing * 0.35;
+    const footX = PLAYER_CENTER_X + direction * 13 + swing * 0.55;
+    const footY = baseline - lift;
+
+    context.beginPath();
+    context.moveTo(hipX, baseline - 11);
+    context.quadraticCurveTo(kneeX, baseline - 6, footX, footY - 2);
+    context.stroke();
+
+    context.fillStyle = '#77675b';
+    context.strokeStyle = '#514941';
+    context.lineWidth = 1.25;
+    context.beginPath();
+    context.ellipse(footX + 2, footY - 1, 7, 3.5, -0.12, 0, Math.PI * 2);
+    context.fill();
+    context.stroke();
+    context.strokeStyle = '#544a42';
+    context.lineWidth = 3.5;
+  }
+
+  context.restore();
 }
 
 function drawFallbackRunner(
@@ -469,18 +514,18 @@ function drawWindStreaks(
   }
 
   context.save();
-  context.globalAlpha = 0.12;
+  context.globalAlpha = 0.22;
   context.strokeStyle = '#fff4d4';
-  context.lineWidth = 2;
+  context.lineWidth = 3.5;
   context.lineCap = 'round';
 
   for (let index = 0; index < 3; index += 1) {
     const drift = (state.elapsed * 92 + index * 27) % 54;
-    const y = GROUND_Y - 64 + index * 17 + pose.bobOffset * 0.35;
+    const y = GROUND_Y - 60 + index * 16 + pose.bobOffset * 0.35;
     const x = PLAYER_CENTER_X - 55 - drift;
     context.beginPath();
     context.moveTo(x, y);
-    context.lineTo(x + 18 + index * 3, y - 2);
+    context.lineTo(x + 24 + index * 3, y - 2);
     context.stroke();
   }
 
@@ -499,8 +544,8 @@ function drawFootstepDust(
   }
 
   const direction = pose.contactFoot === 'left' ? -1 : 1;
-  const centerX = PLAYER_CENTER_X + direction * 14;
-  const alpha = pose.contactStrength * 0.2;
+  const centerX = PLAYER_CENTER_X + direction * 17;
+  const alpha = pose.contactStrength * 0.52;
   context.save();
   context.fillStyle = `rgba(255, 244, 212, ${alpha})`;
 
@@ -508,7 +553,7 @@ function drawFootstepDust(
     const spread = (1 - pose.contactStrength) * (index + 2);
     const x = centerX - 7 + index * 6 - spread;
     const y = GROUND_Y - 1 - spread * (index + 1) * 0.35;
-    const radius = 1.5 + pose.contactStrength * 0.5 - index * 0.2;
+    const radius = 3 + pose.contactStrength * 0.9 - index * 0.35;
     context.beginPath();
     context.arc(x, y, radius, 0, Math.PI * 2);
     context.fill();

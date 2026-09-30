@@ -85,6 +85,6 @@ export function getRunnerAnimationPose(
     contactFoot: cycleProgress < 0.5 ? 'left' : 'right',
     contactStrength: reduceMotion
       ? 0
-      : Math.max(0, 1 - contactDistance / 0.08),
+      : Math.max(0, 1 - contactDistance / 0.12),
   };
 }

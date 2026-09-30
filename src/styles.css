@@ -3475,10 +3475,22 @@ kbd,
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .button:hover,
+  .level-card:not(:disabled):hover,
+  .touch-button:hover:not(:disabled) {
+    transform: none;
+  }
+
   .touch-button:active:not(:disabled),
   .button:active,
   .pause-button:active,
   .back-button:active {
     transform: none;
   }
+}
+
+.game-main:focus-visible,
+#level-map h2:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
 }

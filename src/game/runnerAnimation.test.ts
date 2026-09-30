@@ -46,6 +46,24 @@ describe('runner animation timing', () => {
     );
   });
 
+  it('maps the source cycle contact poses to frames zero and six', () => {
+    const leftContactFrame = getRunnerAnimationPose(0, 12);
+    const rightContactFrame = getRunnerAnimationPose(
+      RUNNER_CYCLE_SECONDS / 2,
+      12,
+    );
+
+    expect(leftContactFrame.frameIndex).toBe(0);
+    expect(leftContactFrame.contactFoot).toBe('left');
+    expect(leftContactFrame.contactStrength).toBe(1);
+    expect(
+      getRunnerAnimationPose(1 / RUNNER_FRAMES_PER_SECOND, 12).contactStrength,
+    ).toBeGreaterThan(0);
+    expect(rightContactFrame.frameIndex).toBe(6);
+    expect(rightContactFrame.contactFoot).toBe('right');
+    expect(rightContactFrame.contactStrength).toBe(1);
+  });
+
   it('provides four distinct procedural fallback poses per sprite cycle', () => {
     const steps = [0.04, 0.21, 0.38, 0.55].map(
       (elapsed) => getRunnerAnimationPose(elapsed, 0).stepIndex,
