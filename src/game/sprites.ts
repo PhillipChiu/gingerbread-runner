@@ -6,10 +6,11 @@ const FRAME_SOURCE_WIDTH = 384;
 const FRAME_SOURCE_HEIGHT = 1024 / 3;
 const FRAME_CROP_X = 16;
 const FRAME_CROP_WIDTH = 354;
+// Stop each row crop above its numbered badge before the poses are keyed and trimmed.
 const FRAME_ROWS = [
   { top: 28, height: 292 },
   { top: 32, height: 270 },
-  { top: 17, height: 260 },
+  { top: 17, height: 257 },
 ] as const;
 
 let characterFramesPromise: Promise<SpriteFrame[]> | null = null;
