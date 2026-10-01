@@ -9,7 +9,67 @@ import {
   PLAYER_X,
 } from './engine';
 import { LEVELS } from './levels';
-import { expandObstaclePattern } from './obstaclePattern';
+import {
+  expandObstaclePattern,
+  getObstacleCue,
+} from './obstaclePattern';
+
+function getActionableJumpDistances(
+  level: (typeof LEVELS)[number],
+  cueKey: string,
+  contactDistance: number,
+): number[] {
+  const distances: number[] = [];
+  for (
+    let distance = contactDistance - 300;
+    distance < contactDistance;
+    distance += 1
+  ) {
+    const cue = getObstacleCue(level, distance);
+    if (cue?.key === cueKey && cue.kind === 'jump') {
+      distances.push(distance);
+    }
+  }
+
+  return distances;
+}
+
+function expectJumpAtCueToClearObstacle(
+  level: (typeof LEVELS)[number],
+  obstacle: ReturnType<typeof expandObstaclePattern>['obstacles'][number],
+  takeoffDistance: number,
+): void {
+  const initial = createGameState(level);
+  let state = applyPlayerAction(
+    {
+      ...initial,
+      distance: takeoffDistance,
+      obstacleSchedule: [obstacle],
+      obstacleSections: [],
+      nextScheduledObstacleIndex: 0,
+      nextPickupIn: 5,
+    },
+    'jump',
+  );
+  const clearDistance = obstacle.contactDistance + obstacle.width + 59;
+
+  for (
+    let frame = 0;
+    frame < 40 && state.distance <= clearDistance && state.status === 'running';
+    frame += 1
+  ) {
+    state = advanceGame(state, 0.05, () => 0.9);
+  }
+
+  expect(state.distance).toBeGreaterThan(clearDistance);
+  expect(state.status).toBe('running');
+  expect(state.energy).toBeGreaterThan(99);
+  expect(
+    state.obstacles.some(
+      (remaining) => remaining.contactDistance === obstacle.contactDistance,
+    ),
+  ).toBe(true);
+}
 
 describe('ten-stage runner data', () => {
   it('contains ten stages with increasing distance and pace', () => {
@@ -179,6 +239,52 @@ describe('runner state', () => {
 
     expect(cleared.energy).toBeGreaterThan(99);
     expect(cleared.obstacles).toHaveLength(1);
+  });
+
+  it('safely clears the tutorial stump at both edges of its maximum-speed jump cue', () => {
+    const level = {
+      ...LEVELS[0]!,
+      baseSpeed: LEVELS[0]!.baseSpeed + LEVELS[0]!.speedRamp,
+      speedRamp: 0,
+    };
+    const obstacle = expandObstaclePattern(level).obstacles.find(
+      (scheduled) => scheduled.patternRole === 'prelude',
+    )!;
+    const cueDistances = getActionableJumpDistances(
+      level,
+      `${obstacle.patternId}:jump`,
+      obstacle.contactDistance,
+    );
+
+    expect(cueDistances.length).toBeGreaterThan(0);
+    expectJumpAtCueToClearObstacle(level, obstacle, cueDistances[0]!);
+    expectJumpAtCueToClearObstacle(level, obstacle, cueDistances.at(-1)!);
+  });
+
+  it('safely clears the maximum-speed L10 gap at both edges of its jump cue', () => {
+    const level = {
+      ...LEVELS[9]!,
+      baseSpeed: LEVELS[9]!.baseSpeed + LEVELS[9]!.speedRamp,
+      speedRamp: 0,
+    };
+    const section = expandObstaclePattern(level).sections[1]!;
+    const gapIndex = section.followupJumps.indexOf('gap');
+    const obstacle = expandObstaclePattern(level).obstacles.find(
+      (scheduled) =>
+        scheduled.patternId === section.id &&
+        scheduled.patternRole === 'followup' &&
+        scheduled.patternIndex === gapIndex + 1,
+    )!;
+    const cueDistances = getActionableJumpDistances(
+      level,
+      `${section.id}:jump-${gapIndex + 1}`,
+      obstacle.contactDistance,
+    );
+
+    expect(gapIndex).toBeGreaterThanOrEqual(0);
+    expect(cueDistances.length).toBeGreaterThan(0);
+    expectJumpAtCueToClearObstacle(level, obstacle, cueDistances[0]!);
+    expectJumpAtCueToClearObstacle(level, obstacle, cueDistances.at(-1)!);
   });
 
   it('collects a nearby energy fruit for score and run energy', () => {

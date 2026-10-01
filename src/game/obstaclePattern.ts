@@ -4,6 +4,7 @@ import type {
   PatternObstacleType,
   SlideSectionPattern,
 } from './levels';
+import { getJumpAvoidanceTimeWindow, getRunSpeed } from './physics';
 
 export const OBSTACLE_WIDTHS: Readonly<Record<PatternObstacleType, number>> = {
   arch: 82,
@@ -14,7 +15,9 @@ export const OBSTACLE_WIDTHS: Readonly<Record<PatternObstacleType, number>> = {
 export const PLAYER_COLLISION_WIDTH = 59;
 export const OBSTACLE_COLLISION_CLEARANCE = PLAYER_COLLISION_WIDTH;
 export const SLIDE_HOLD_LEAD_DISTANCE = 300;
+export const JUMP_PREPARE_LEAD_DISTANCE = 300;
 export const SECTION_PREVIEW_LEAD_DISTANCE = 650;
+export const MIN_RECOVERY_CUE_DISTANCE = 300;
 export const SAFE_FINISH_DISTANCE = 650;
 
 export type ObstaclePatternRole = 'prelude' | 'arch' | 'followup';
@@ -48,6 +51,7 @@ export interface ExpandedObstaclePattern {
 
 export type ObstacleCueKind =
   | 'prelude'
+  | 'prepare'
   | 'preview'
   | 'hold'
   | 'release'
@@ -318,6 +322,50 @@ function getJumpName(type: FollowupJumpType): string {
   return type === 'gap' ? '裂隙' : '樹樁';
 }
 
+function getJumpCueWindow(
+  level: LevelConfig,
+  obstacleType: FollowupJumpType,
+  contactDistance: number,
+  obstacleWidth: number,
+  currentDistance: number,
+): { startDistance: number; endDistance: number } | null {
+  const speed = getRunSpeed(level, currentDistance);
+  const { ascentSeconds, descentSeconds } =
+    getJumpAvoidanceTimeWindow(obstacleType);
+  const startDistance =
+    contactDistance +
+    obstacleWidth +
+    OBSTACLE_COLLISION_CLEARANCE -
+    speed * descentSeconds;
+  const endDistance = contactDistance - speed * ascentSeconds;
+
+  return startDistance < endDistance
+    ? { startDistance, endDistance }
+    : null;
+}
+
+function getPrepareCue(key: string, obstacleType: FollowupJumpType): ObstacleCue {
+  return {
+    key,
+    kind: 'prepare',
+    text: `前方${getJumpName(obstacleType)}，準備跳躍；稍後依提示起跳。`,
+  };
+}
+
+function getJumpCue(
+  key: string,
+  obstacleType: FollowupJumpType,
+  releaseSlide: boolean,
+): ObstacleCue {
+  return {
+    key,
+    kind: 'jump',
+    text: releaseSlide
+      ? `現在放開滑行並跳過${getJumpName(obstacleType)}。`
+      : `現在跳過${getJumpName(obstacleType)}。`,
+  };
+}
+
 export function getObstacleCue(
   level: LevelConfig,
   distance: number,
@@ -325,9 +373,27 @@ export function getObstacleCue(
   const { obstacles, sections } = expandObstaclePattern(level);
   const currentDistance = Math.max(0, distance);
 
-  for (const section of sections) {
-    const previewStart =
+  for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex += 1) {
+    const section = sections[sectionIndex]!;
+    const previousSection = sections[sectionIndex - 1];
+    let previewStart =
       section.firstArchContactDistance - SECTION_PREVIEW_LEAD_DISTANCE;
+    if (previousSection) {
+      const recoveryStart = previousSection.finalFollowupClearDistance;
+      const recoveryDistance = previewStart - recoveryStart;
+      if (recoveryDistance >= MIN_RECOVERY_CUE_DISTANCE) {
+        if (currentDistance >= recoveryStart && currentDistance < previewStart) {
+          return {
+            key: `${previousSection.id}:recovery`,
+            kind: 'recovery',
+            text: '本組跳躍已完成，恢復奔跑並留意下一組。',
+          };
+        }
+      } else {
+        previewStart = recoveryStart;
+      }
+    }
+
     const holdCueStart = section.holdStartDistance;
 
     if (currentDistance >= previewStart && currentDistance < holdCueStart) {
@@ -349,52 +415,79 @@ export function getObstacleCue(
       };
     }
 
-    const firstJumpCueStart =
-      section.followupJumpContactDistances[0]! -
-      SLIDE_HOLD_LEAD_DISTANCE;
-    if (
-      currentDistance >= section.lastArchClearDistance &&
-      currentDistance < firstJumpCueStart
-    ) {
-      return {
-        key: `${section.id}:release`,
-        kind: 'release',
-        text: `最後一座低門已清空，現在放開滑行，準備跳過${getJumpName(section.followupJumps[0]!)}。`,
-      };
-    }
-
     for (
       let jumpIndex = 0;
       jumpIndex < section.followupJumpContactDistances.length;
       jumpIndex += 1
     ) {
-      const cueStart =
-        section.followupJumpContactDistances[jumpIndex]! -
-        SLIDE_HOLD_LEAD_DISTANCE;
-      const nextCueStart =
-        section.followupJumpContactDistances[jumpIndex + 1] === undefined
-          ? section.finalFollowupClearDistance
-          : section.followupJumpContactDistances[jumpIndex + 1]! -
-            SLIDE_HOLD_LEAD_DISTANCE;
+      const jumpType = section.followupJumps[jumpIndex]!;
+      const contactDistance =
+        section.followupJumpContactDistances[jumpIndex]!;
+      const cueWindow = getJumpCueWindow(
+        level,
+        jumpType,
+        contactDistance,
+        OBSTACLE_WIDTHS[jumpType],
+        currentDistance,
+      );
+      if (!cueWindow) {
+        continue;
+      }
 
-      if (currentDistance >= cueStart && currentDistance < nextCueStart) {
-        const jumpType = section.followupJumps[jumpIndex]!;
-        return {
-          key: `${section.id}:jump-${jumpIndex + 1}`,
-          kind: 'jump',
-          text: `現在跳過${getJumpName(jumpType)}。放開滑行後，按跳躍越過前方障礙。`,
-        };
+      const jumpCueKey = `${section.id}:jump-${jumpIndex + 1}`;
+      if (jumpIndex === 0) {
+        if (
+          currentDistance >= section.lastArchClearDistance &&
+          currentDistance < cueWindow.startDistance
+        ) {
+          return {
+            key: `${section.id}:release`,
+            kind: 'release',
+            text: `最後一座低門已清空，現在放開滑行，準備跳過${getJumpName(jumpType)}。`,
+          };
+        }
+      } else {
+        const previousJumpType = section.followupJumps[jumpIndex - 1]!;
+        const previousJumpClearDistance =
+          section.followupJumpContactDistances[jumpIndex - 1]! +
+          OBSTACLE_WIDTHS[previousJumpType] +
+          OBSTACLE_COLLISION_CLEARANCE;
+        const prepareStart = Math.max(
+          previousJumpClearDistance,
+          contactDistance - JUMP_PREPARE_LEAD_DISTANCE,
+        );
+
+        if (
+          currentDistance >= previousJumpClearDistance &&
+          currentDistance < prepareStart
+        ) {
+          return {
+            key: `${section.id}:recovery-${jumpIndex}`,
+            kind: 'recovery',
+            text: '本次跳躍已完成，恢復奔跑並留意下一個障礙。',
+          };
+        }
+
+        if (
+          currentDistance >= prepareStart &&
+          currentDistance < cueWindow.startDistance
+        ) {
+          return getPrepareCue(jumpCueKey, jumpType);
+        }
+      }
+
+      if (
+        currentDistance >= cueWindow.startDistance &&
+        currentDistance < cueWindow.endDistance
+      ) {
+        return getJumpCue(jumpCueKey, jumpType, jumpIndex === 0);
       }
     }
 
-    const nextSection = sections[section.sectionIndex + 1];
     if (
+      sectionIndex === sections.length - 1 &&
       currentDistance >= section.finalFollowupClearDistance &&
-      currentDistance < section.recoveryEndDistance &&
-      (!nextSection ||
-        currentDistance <
-          nextSection.firstArchContactDistance -
-            SECTION_PREVIEW_LEAD_DISTANCE)
+      currentDistance < section.recoveryEndDistance
     ) {
       return {
         key: `${section.id}:recovery`,
@@ -405,26 +498,48 @@ export function getObstacleCue(
   }
 
   for (const prelude of obstacles) {
-    const cueStart = prelude.contactDistance - SLIDE_HOLD_LEAD_DISTANCE;
+    const cueStart = prelude.contactDistance - JUMP_PREPARE_LEAD_DISTANCE;
     const cueEnd =
       prelude.contactDistance +
       prelude.width +
       OBSTACLE_COLLISION_CLEARANCE;
-    if (currentDistance >= cueStart && currentDistance < cueEnd) {
-      const action =
-        prelude.type === 'arch'
-          ? '按住滑行'
-          : '現在跳躍';
-      const obstacleName =
-        prelude.type === 'gap'
-          ? '裂隙'
-          : prelude.type === 'stump'
-            ? '樹樁'
-            : '低門';
+
+    if (prelude.type === 'arch') {
+      if (currentDistance >= cueStart && currentDistance < cueEnd) {
+        return {
+          key: `${prelude.patternId}:hold`,
+          kind: 'hold',
+          text: '前方低門，按住滑行通過。',
+        };
+      }
+
+      continue;
+    }
+
+    const cueWindow = getJumpCueWindow(
+      level,
+      prelude.type,
+      prelude.contactDistance,
+      prelude.width,
+      currentDistance,
+    );
+    if (!cueWindow) {
+      continue;
+    }
+
+    if (
+      currentDistance >= cueStart &&
+      currentDistance < cueWindow.startDistance
+    ) {
+      return getPrepareCue(`${prelude.patternId}:prepare`, prelude.type);
+    }
+
+    if (
+      currentDistance >= cueWindow.startDistance &&
+      currentDistance < cueWindow.endDistance
+    ) {
       return {
-        key: `${prelude.patternId}:cue`,
-        kind: 'prelude',
-        text: `前方${obstacleName}，${action}通過。`,
+        ...getJumpCue(`${prelude.patternId}:jump`, prelude.type, false),
       };
     }
   }

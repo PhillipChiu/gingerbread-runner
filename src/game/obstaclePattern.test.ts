@@ -264,7 +264,7 @@ describe('deterministic obstacle patterns', () => {
     );
   });
 
-  it('gives speed-maximum-aware preview, hold, release and jump cues', () => {
+  it('keeps preparation and release cues until physics-based jump cues are actionable', () => {
     LEVELS.forEach((level) => {
       const { sections } = expandObstaclePattern(level);
       const fastestSpeed = level.baseSpeed + level.speedRamp;
@@ -293,8 +293,145 @@ describe('deterministic obstacle patterns', () => {
             level,
             section.followupJumpContactDistances[0]! - 300,
           )?.kind,
-        ).toBe('jump');
+        ).toBe('release');
       }
+    });
+  });
+
+  it('prepares the tutorial jump early but says jump only inside its safe takeoff window', () => {
+    const level = LEVELS[0]!;
+    const tutorialStump = expandObstaclePattern(level).obstacles.find(
+      (obstacle) => obstacle.patternRole === 'prelude',
+    )!;
+    const preparation = getObstacleCue(
+      level,
+      tutorialStump.contactDistance - 300,
+    );
+
+    expect(preparation).toMatchObject({ kind: 'prepare' });
+    expect(preparation?.text).toContain('準備跳躍');
+    expect(preparation?.text).not.toContain('現在跳');
+
+    const maximumSpeedLevel = {
+      ...level,
+      baseSpeed: level.baseSpeed + level.speedRamp,
+      speedRamp: 0,
+    };
+    const maximumSpeedStump = expandObstaclePattern(maximumSpeedLevel).obstacles.find(
+      (obstacle) => obstacle.patternRole === 'prelude',
+    )!;
+
+    expect(
+      getObstacleCue(
+        maximumSpeedLevel,
+        maximumSpeedStump.contactDistance - 300,
+      )?.kind,
+    ).not.toBe('jump');
+    expect(
+      getObstacleCue(
+        maximumSpeedLevel,
+        maximumSpeedStump.contactDistance - 92,
+      )?.kind,
+    ).toBe('jump');
+    expect(
+      getObstacleCue(
+        maximumSpeedLevel,
+        maximumSpeedStump.contactDistance - 18,
+      )?.kind,
+    ).toBe('jump');
+    expect(
+      getObstacleCue(
+        maximumSpeedLevel,
+        maximumSpeedStump.contactDistance - 17,
+      )?.kind,
+    ).not.toBe('jump');
+  });
+
+  it('keeps every maximum-speed jump cue actionable beyond one snapshot interval', () => {
+    LEVELS.forEach((level) => {
+      const fastestSpeed = level.baseSpeed + level.speedRamp;
+      const maximumSpeedLevel = {
+        ...level,
+        baseSpeed: fastestSpeed,
+        speedRamp: 0,
+      };
+      const { sections } = expandObstaclePattern(maximumSpeedLevel);
+
+      sections.forEach((section) => {
+        section.followupJumps.forEach((jumpType, jumpIndex) => {
+          const contactDistance =
+            section.followupJumpContactDistances[jumpIndex]!;
+          const cueKey = `${section.id}:jump-${jumpIndex + 1}`;
+          const sampledCues = Array.from(
+            { length: 300 },
+            (_, offset) =>
+              getObstacleCue(
+                maximumSpeedLevel,
+                contactDistance - 300 + offset,
+              ),
+          );
+          const actionableCues = sampledCues.filter(
+            (cue) => cue?.key === cueKey && cue.kind === 'jump',
+          );
+
+          expect(actionableCues.length / fastestSpeed).toBeGreaterThan(0.12);
+          expect(actionableCues[0]?.text).toContain(
+            jumpType === 'gap' ? '裂隙' : '樹樁',
+          );
+
+          if (jumpIndex === 0) {
+            expect(
+              getObstacleCue(
+                maximumSpeedLevel,
+                contactDistance - 300,
+              )?.kind,
+            ).toBe('release');
+          } else {
+            expect(
+              getObstacleCue(
+                maximumSpeedLevel,
+                contactDistance - 300,
+              )?.kind,
+            ).toBe('prepare');
+          }
+        });
+      });
+    });
+  });
+
+  it('hands L10’s brief third-to-fourth transition directly to a stable preview', () => {
+    const level = LEVELS[9]!;
+    const { sections } = expandObstaclePattern(level);
+    const thirdSection = sections[2]!;
+    const fourthSection = sections[3]!;
+    const normalPreviewStart =
+      fourthSection.firstArchContactDistance - 650;
+
+    expect(
+      fourthSection.firstArchContactDistance -
+        thirdSection.finalFollowupClearDistance,
+    ).toBe(692);
+    expect(
+      normalPreviewStart - thirdSection.finalFollowupClearDistance,
+    ).toBe(42);
+
+    const handoffCue = getObstacleCue(
+      level,
+      thirdSection.finalFollowupClearDistance,
+    );
+    const followingSnapshotCue = getObstacleCue(
+      level,
+      thirdSection.finalFollowupClearDistance + 53,
+    );
+
+    expect(handoffCue).toMatchObject({
+      key: `${fourthSection.id}:preview`,
+      kind: 'preview',
+    });
+    expect(handoffCue?.text).toContain('第 4 組');
+    expect(followingSnapshotCue).toMatchObject({
+      key: `${fourthSection.id}:preview`,
+      kind: 'preview',
     });
   });
 });

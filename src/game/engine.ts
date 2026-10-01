@@ -5,6 +5,15 @@ import {
   type ObstaclePatternRole,
   type ScheduledObstacle,
 } from './obstaclePattern';
+import {
+  GAP_JUMP_CLEARANCE,
+  JUMP_GRAVITY,
+  JUMP_IMPULSE,
+  STUMP_JUMP_CLEARANCE,
+  getRunSpeed,
+} from './physics';
+
+export { getRunSpeed } from './physics';
 
 export const WORLD_WIDTH = 960;
 export const WORLD_HEIGHT = 420;
@@ -84,8 +93,6 @@ export interface GameSnapshot {
   cue: ReturnType<typeof getObstacleCue>;
 }
 
-const GRAVITY = 1_650;
-const JUMP_IMPULSE = 675;
 const PICKUP_HEIGHTS = [150, 270, 306, 270] as const;
 const PICKUP_VERTICAL_TOLERANCE = 32;
 const SLIDE_PICKUP_CENTER_OFFSET = 20;
@@ -93,11 +100,6 @@ const PLAYER_HITBOX_LEFT = PLAYER_X + 7;
 const PLAYER_HITBOX_RIGHT = PLAYER_X + PLAYER_WIDTH - 6;
 const OBSTACLE_SPAWN_RIGHT_EDGE = WORLD_WIDTH + 48;
 const PICKUP_SPAWN_X = WORLD_WIDTH + 44;
-
-export function getRunSpeed(level: LevelConfig, distance: number): number {
-  const progress = Math.min(Math.max(distance / level.distanceGoal, 0), 1);
-  return level.baseSpeed + level.speedRamp * progress;
-}
 
 export function isPlayerSliding(player: PlayerState): boolean {
   return (
@@ -217,7 +219,7 @@ export function advanceGame(
   const jumpVelocity =
     jumpHeight === 0
       ? 0
-      : state.player.jumpVelocity - GRAVITY * delta;
+    : state.player.jumpVelocity - JUMP_GRAVITY * delta;
   const playerIsSliding =
     state.player.slideHeld && jumpHeight === 0 && jumpVelocity === 0;
   const wasSliding = isPlayerSliding(state.player);
@@ -275,7 +277,10 @@ export function advanceGame(
     const canAvoid =
       obstacle.type === 'arch'
         ? isPlayerSliding(player)
-        : player.jumpHeight > (obstacle.type === 'gap' ? 58 : 40);
+        : player.jumpHeight >
+          (obstacle.type === 'gap'
+            ? GAP_JUMP_CLEARANCE
+            : STUMP_JUMP_CLEARANCE);
 
     if (
       overlapsRunner &&
