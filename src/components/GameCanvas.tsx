@@ -132,7 +132,7 @@ export default function GameCanvas(props: GameCanvasProps) {
           ? (now - lastFrameAt) / 1_000
           : 0;
       if (shouldAdvance) {
-        state = advanceGame(state, delta);
+        state = advanceGame(state, delta, Math.random, reduceMotion);
         lastFrameAt = now;
       } else {
         lastFrameAt = 0;

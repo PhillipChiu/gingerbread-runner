@@ -12,6 +12,12 @@ import {
   STUMP_JUMP_CLEARANCE,
   getRunSpeed,
 } from './physics';
+import {
+  getRunnerAnimationPose,
+  RUNNER_DRAW_BOUNDS,
+  RUNNER_FRAME_COUNT,
+  SLIDE_DRAW_BOUNDS,
+} from './runnerAnimation';
 
 export { getRunSpeed } from './physics';
 
@@ -21,6 +27,9 @@ export const GROUND_Y = 326;
 export const PLAYER_X = 174;
 export const PLAYER_WIDTH = 72;
 export const PLAYER_CENTER_X = PLAYER_X + PLAYER_WIDTH / 2;
+export const PICKUP_TOUCH_RADIUS = 18;
+export const PICKUP_BOB_ANGULAR_SPEED = 5;
+export const PICKUP_BOB_AMPLITUDE = 4;
 
 export const CUSTOM_GAME_TUNING = {
   startingEnergy: 100,
@@ -94,8 +103,6 @@ export interface GameSnapshot {
 }
 
 const PICKUP_HEIGHTS = [150, 270, 306, 270] as const;
-const PICKUP_VERTICAL_TOLERANCE = 32;
-const SLIDE_PICKUP_CENTER_OFFSET = 20;
 const PLAYER_HITBOX_LEFT = PLAYER_X + 7;
 const PLAYER_HITBOX_RIGHT = PLAYER_X + PLAYER_WIDTH - 6;
 const OBSTACLE_SPAWN_RIGHT_EDGE = WORLD_WIDTH + 48;
@@ -106,6 +113,50 @@ export function isPlayerSliding(player: PlayerState): boolean {
     player.slideHeld &&
     player.jumpHeight === 0 &&
     player.jumpVelocity === 0
+  );
+}
+
+export function getPickupRenderY(
+  pickup: Pickup,
+  elapsed: number,
+  reduceMotion = false,
+): number {
+  return (
+    pickup.y +
+    (reduceMotion
+      ? 0
+      : Math.sin(elapsed * PICKUP_BOB_ANGULAR_SPEED + pickup.id) *
+        PICKUP_BOB_AMPLITUDE)
+  );
+}
+
+function overlapsRunnerPickup(
+  pickup: Pickup,
+  player: PlayerState,
+  elapsed: number,
+  reduceMotion: boolean,
+): boolean {
+  const sliding = isPlayerSliding(player);
+  const bounds = sliding
+    ? SLIDE_DRAW_BOUNDS
+    : RUNNER_DRAW_BOUNDS;
+  const pose = getRunnerAnimationPose(elapsed, RUNNER_FRAME_COUNT, reduceMotion);
+  const baseline =
+    GROUND_Y -
+    player.jumpHeight +
+    (sliding || player.jumpHeight > 0 ? 0 : pose.bobOffset);
+  const pickupY = getPickupRenderY(pickup, elapsed, reduceMotion);
+  const left = PLAYER_CENTER_X - bounds.width / 2;
+  const right = PLAYER_CENTER_X + bounds.width / 2;
+  const top = baseline - bounds.height;
+  const nearestX = Math.max(left, Math.min(pickup.x, right));
+  const nearestY = Math.max(top, Math.min(pickupY, baseline));
+  const offsetX = pickup.x - nearestX;
+  const offsetY = pickupY - nearestY;
+
+  return (
+    offsetX * offsetX + offsetY * offsetY <=
+    PICKUP_TOUCH_RADIUS * PICKUP_TOUCH_RADIUS
   );
 }
 
@@ -195,6 +246,7 @@ export function advanceGame(
   state: GameState,
   deltaSeconds: number,
   random: () => number = Math.random,
+  reduceMotion = false,
 ): GameState {
   if (state.status !== 'running') {
     return state;
@@ -328,11 +380,6 @@ export function advanceGame(
       state.level.pickupInterval * (0.83 + Math.min(random(), 0.99) * 0.34);
   }
 
-  const playerCenterY =
-    GROUND_Y -
-    56 -
-    player.jumpHeight +
-    (isPlayerSliding(player) ? SLIDE_PICKUP_CENTER_OFFSET : 0);
   const remainingPickups: Pickup[] = [];
 
   for (const pickup of pickups) {
@@ -348,11 +395,7 @@ export function advanceGame(
       continue;
     }
 
-    const closeEnough =
-      Math.abs(pickup.x - PLAYER_CENTER_X) < 54 &&
-      Math.abs(pickup.y - playerCenterY) < PICKUP_VERTICAL_TOLERANCE;
-
-    if (closeEnough) {
+    if (overlapsRunnerPickup(pickup, player, elapsed, reduceMotion)) {
       collectibles += 1;
       combo += 1;
       score +=
