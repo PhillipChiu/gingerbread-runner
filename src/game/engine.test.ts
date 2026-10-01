@@ -345,11 +345,13 @@ describe('runner state', () => {
       obstacleSections: [],
       pickups: [{ id: 15, x: PLAYER_CENTER_X + 12, y: 306 }],
     };
+    const baseline = advanceGame({ ...state, pickups: [] }, 0.05, () => 0.9);
     const collected = advanceGame(state, 0.05, () => 0.9);
 
     expect(collected.collectibles).toBe(1);
     expect(collected.pickups).toHaveLength(0);
     expect(collected.energy).toBeGreaterThan(state.energy);
+    expect(collected.score).toBeGreaterThan(baseline.score);
   });
 
   it('places level obstacles at deterministic first-contact distances', () => {
