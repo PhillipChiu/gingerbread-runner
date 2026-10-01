@@ -3,6 +3,8 @@ export const RUNNER_FRAME_COUNT = 12;
 export const RUNNER_CYCLE_SECONDS =
   RUNNER_FRAME_COUNT / RUNNER_FRAMES_PER_SECOND;
 export const RUNNER_BODY_BOB_AMPLITUDE = 5;
+export const RUNNER_DRAW_BOUNDS = { width: 126, height: 120 } as const;
+export const SLIDE_DRAW_BOUNDS = { width: 128, height: 72 } as const;
 
 export interface RunnerFrameDimensions {
   width: number;
@@ -28,6 +30,11 @@ export interface RunnerAnimationPose {
   stepIndex: number;
   contactFoot: 'left' | 'right';
   contactStrength: number;
+}
+
+export interface RunnerAnimationSelection {
+  action: 'run' | 'slide';
+  pose: RunnerAnimationPose;
 }
 
 export function getRunnerFrameLayout(
@@ -86,5 +93,22 @@ export function getRunnerAnimationPose(
     contactStrength: reduceMotion
       ? 0
       : Math.max(0, 1 - contactDistance / 0.12),
+  };
+}
+
+export function selectRunnerAnimation(
+  isSliding: boolean,
+  runElapsedSeconds: number,
+  slideElapsedSeconds: number,
+  frameCount: number,
+  reduceMotion = false,
+): RunnerAnimationSelection {
+  return {
+    action: isSliding ? 'slide' : 'run',
+    pose: getRunnerAnimationPose(
+      isSliding ? slideElapsedSeconds : runElapsedSeconds,
+      frameCount,
+      reduceMotion,
+    ),
   };
 }

@@ -5,9 +5,11 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from 'react';
 import CharacterPreview from './components/CharacterPreview';
-import GameCanvas, { type ActionRequest } from './components/GameCanvas';
+import GameCanvas from './components/GameCanvas';
 import {
   CUSTOM_GAME_TUNING,
   type GameSnapshot,
@@ -15,6 +17,12 @@ import {
   type PlayerAction,
 } from './game/engine';
 import { getLevel, LEVELS } from './game/levels';
+import {
+  OrderedPlayerActionQueue,
+  reduceSlideSources,
+  type SlideSourceEvent,
+} from './game/input';
+import { getObstacleCue } from './game/obstaclePattern';
 import {
   readProgress,
   recordRun,
@@ -34,6 +42,7 @@ const INITIAL_SNAPSHOT: GameSnapshot = {
   collectibles: 0,
   combo: 0,
   speed: LEVELS[0]!.baseSpeed,
+  cue: null,
 };
 
 function BrandMark() {
@@ -101,6 +110,7 @@ function getSnapshot(state: GameState): GameSnapshot {
     collectibles: state.collectibles,
     combo: state.combo,
     speed: state.level.baseSpeed,
+    cue: getObstacleCue(state.level, state.distance),
   };
 }
 
@@ -113,10 +123,23 @@ function App() {
   const [screen, setScreen] = useState<Screen>('menu');
   const [runKey, setRunKey] = useState(0);
   const [snapshot, setSnapshot] = useState<GameSnapshot>(INITIAL_SNAPSHOT);
-  const [actionRequest, setActionRequest] = useState<ActionRequest | null>(null);
+  const [actionQueue] = useState(() => new OrderedPlayerActionQueue());
+  const [actionQueueVersion, setActionQueueVersion] = useState(0);
   const [outcome, setOutcome] = useState<'won' | 'lost' | null>(null);
   const [accessibleHintsEnabled, setAccessibleHintsEnabled] = useState(false);
   const actionIdRef = useRef(0);
+  const runKeyRef = useRef(runKey);
+  runKeyRef.current = runKey;
+  const slideSourcesRef = useRef<ReadonlySet<string>>(new Set());
+  const [slideHeld, setSlideHeld] = useState(false);
+  const [slideAnnouncement, setSlideAnnouncement] = useState('');
+  const slideButtonRef = useRef<HTMLButtonElement>(null);
+  const pulseTimerRef = useRef<number | null>(null);
+  const clickSuppressionTimerRef = useRef<number | null>(null);
+  const suppressNextSlideClickRef = useRef(false);
+  const releaseAllSlideSourcesRef = useRef<
+    (announce?: boolean, notifyGameCanvas?: boolean) => void
+  >(() => {});
   const dialogRef = useRef<HTMLDivElement>(null);
   const dialogPrimaryRef = useRef<HTMLButtonElement>(null);
   const gameRegionRef = useRef<HTMLElement>(null);
@@ -127,9 +150,200 @@ function App() {
   const selectedLevel = getLevel(selectedLevelId);
   const isCleared = progress.clearedLevels.includes(activeLevel.id);
 
+  const sendAction = (action: PlayerAction, notifyGameCanvas = true): void => {
+    if (action !== 'slideEnd' && screen !== 'playing') {
+      return;
+    }
+
+    actionIdRef.current += 1;
+    actionQueue.enqueue({
+      id: actionIdRef.current,
+      runKey: runKeyRef.current,
+      action,
+    });
+    if (notifyGameCanvas) {
+      setActionQueueVersion((version) => version + 1);
+    }
+  };
+
+  const dispatchSlideSourceEvent = (
+    event: SlideSourceEvent,
+    announce = true,
+    notifyGameCanvas = true,
+  ): void => {
+    const result = reduceSlideSources(slideSourcesRef.current, event);
+    slideSourcesRef.current = result.sources;
+    if (!result.action) {
+      return;
+    }
+
+    const isHeld = result.action === 'slideStart';
+    if (announce) {
+      setSlideHeld(isHeld);
+      setSlideAnnouncement(
+        isHeld ? '滑行中，放開即可恢復跑步。' : '已恢復跑步。',
+      );
+    }
+    sendAction(result.action, notifyGameCanvas);
+  };
+
+  const clearClickSuppression = (): void => {
+    if (clickSuppressionTimerRef.current !== null) {
+      window.clearTimeout(clickSuppressionTimerRef.current);
+      clickSuppressionTimerRef.current = null;
+    }
+    suppressNextSlideClickRef.current = false;
+  };
+
+  const suppressNextSlideClick = (): void => {
+    clearClickSuppression();
+    suppressNextSlideClickRef.current = true;
+    clickSuppressionTimerRef.current = window.setTimeout(() => {
+      suppressNextSlideClickRef.current = false;
+      clickSuppressionTimerRef.current = null;
+    }, 800);
+  };
+
+  const releaseAllSlideSources = (
+    announce = true,
+    notifyGameCanvas = true,
+  ): void => {
+    if (pulseTimerRef.current !== null) {
+      window.clearTimeout(pulseTimerRef.current);
+      pulseTimerRef.current = null;
+    }
+    clearClickSuppression();
+    dispatchSlideSourceEvent(
+      { type: 'releaseAll' },
+      announce,
+      notifyGameCanvas,
+    );
+  };
+  releaseAllSlideSourcesRef.current = releaseAllSlideSources;
+
+  const beginSlidePointer = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ): void => {
+    if (event.button !== 0 || event.currentTarget.disabled) {
+      return;
+    }
+
+    suppressNextSlideClick();
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture can fail if a browser cancels the pointer before dispatch.
+    }
+    dispatchSlideSourceEvent({
+      type: 'press',
+      source: `pointer:${event.pointerId}`,
+    });
+  };
+
+  const endSlidePointer = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ): void => {
+    dispatchSlideSourceEvent({
+      type: 'release',
+      source: `pointer:${event.pointerId}`,
+    });
+    try {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    } catch {
+      // The browser may already have released capture during cancellation.
+    }
+  };
+
+  const getSlideButtonKeySource = (
+    event: Pick<KeyboardEvent, 'code' | 'key'>,
+  ): string | null => {
+    if (event.code === 'Space' || event.key === ' ') {
+      return 'slide-button-key:Space';
+    }
+    if (event.key === 'Enter') {
+      return 'slide-button-key:Enter';
+    }
+    return null;
+  };
+
+  const beginSlideButtonKey = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+  ): void => {
+    const source = getSlideButtonKeySource(event.nativeEvent);
+    if (!source || event.repeat || event.currentTarget.disabled) {
+      return;
+    }
+
+    event.preventDefault();
+    suppressNextSlideClick();
+    dispatchSlideSourceEvent({ type: 'press', source });
+  };
+
+  const endSlideButtonKey = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+  ): void => {
+    const source = getSlideButtonKeySource(event.nativeEvent);
+    if (!source) {
+      return;
+    }
+
+    event.preventDefault();
+    dispatchSlideSourceEvent({ type: 'release', source });
+  };
+
+  const handleSlideButtonClick = (
+    event: ReactMouseEvent<HTMLButtonElement>,
+  ): void => {
+    if (event.detail > 0) {
+      clearClickSuppression();
+      return;
+    }
+
+    if (suppressNextSlideClickRef.current) {
+      clearClickSuppression();
+      return;
+    }
+
+    dispatchSlideSourceEvent({ type: 'press', source: 'sr-click-pulse' });
+    if (pulseTimerRef.current !== null) {
+      window.clearTimeout(pulseTimerRef.current);
+    }
+    pulseTimerRef.current = window.setTimeout(() => {
+      dispatchSlideSourceEvent({
+        type: 'release',
+        source: 'sr-click-pulse',
+      });
+      pulseTimerRef.current = null;
+    }, 600);
+  };
+
   useEffect(() => {
     writeProgress(progress);
   }, [progress]);
+
+  useEffect(() => {
+    const onWindowBlur = (): void => {
+      releaseAllSlideSourcesRef.current();
+    };
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === 'hidden') {
+        releaseAllSlideSourcesRef.current();
+        setScreen((current) =>
+          current === 'playing' ? 'paused' : current,
+        );
+      }
+    };
+
+    window.addEventListener('blur', onWindowBlur);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('blur', onWindowBlur);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      releaseAllSlideSourcesRef.current(false, false);
+    };
+  }, []);
 
   useLayoutEffect(() => {
     const previousScreen = previousScreenRef.current;
@@ -149,6 +363,7 @@ function App() {
       return;
     }
 
+    releaseAllSlideSources();
     setActiveLevelId(level.id);
     setSelectedLevelId(level.id);
     setSnapshot({
@@ -156,28 +371,22 @@ function App() {
       goalDistance: level.distanceGoal,
       speed: level.baseSpeed,
     });
-    setActionRequest(null);
     setOutcome(null);
-    setRunKey((key) => key + 1);
+    const nextRunKey = runKeyRef.current + 1;
+    runKeyRef.current = nextRunKey;
+    setRunKey(nextRunKey);
     setScreen('playing');
   };
 
   const returnToMenu = (): void => {
+    releaseAllSlideSources();
     setScreen('menu');
     setOutcome(null);
   };
 
-  const sendAction = (action: PlayerAction): void => {
-    if (screen !== 'playing') {
-      return;
-    }
-
-    actionIdRef.current += 1;
-    setActionRequest({ id: actionIdRef.current, action });
-  };
-
   const togglePause = (): void => {
     if (screen === 'playing') {
+      releaseAllSlideSources();
       setScreen('paused');
     } else if (screen === 'paused') {
       setScreen('playing');
@@ -223,6 +432,7 @@ function App() {
   };
 
   const finishRun = (finalState: GameState): void => {
+    releaseAllSlideSources();
     const cleared = finalState.status === 'won';
     const nextProgress = recordRun(
       progressRef.current,
@@ -256,6 +466,19 @@ function App() {
         return;
       }
 
+      if (
+        screen === 'playing' &&
+        !event.repeat &&
+        (key === 'arrowdown' || key === 's')
+      ) {
+        event.preventDefault();
+        dispatchSlideSourceEvent({
+          type: 'press',
+          source: `keyboard:${key === 'arrowdown' ? 'ArrowDown' : 'S'}`,
+        });
+        return;
+      }
+
       const interactiveTarget = isInteractiveKeyboardTarget(event.target);
       if (
         interactiveTarget &&
@@ -280,14 +503,31 @@ function App() {
       if (event.code === 'Space' || key === 'arrowup' || key === 'w') {
         event.preventDefault();
         sendAction('jump');
-      } else if (key === 'arrowdown' || key === 's') {
-        event.preventDefault();
-        sendAction('slide');
+      }
+    };
+
+    const onKeyUp = (event: KeyboardEvent): void => {
+      const key = event.key.toLowerCase();
+      if (key === 'arrowdown' || key === 's') {
+        dispatchSlideSourceEvent({
+          type: 'release',
+          source: `keyboard:${key === 'arrowdown' ? 'ArrowDown' : 'S'}`,
+        });
+        return;
+      }
+
+      const source = getSlideButtonKeySource(event);
+      if (source) {
+        dispatchSlideSourceEvent({ type: 'release', source });
       }
     };
 
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
   }, [screen, selectedLevelId]);
 
   const reachedAllStages = progress.clearedLevels.length === LEVELS.length;
@@ -438,8 +678,8 @@ function App() {
                 <span>跳過樹樁與裂隙</span>
               </div>
               <div className="how-to-tip">
-                <span className="keycap">↓</span>
-                <span>滑過低矮拱門</span>
+                <span className="keycap">↓ / S 按住</span>
+                <span>持續滑過連續低門，最後一座通過後放開</span>
               </div>
               <div className="how-to-tip">
                 <span className="tip-energy">✦</span>
@@ -649,7 +889,8 @@ function App() {
                     runKey={runKey}
                     isRunning={screen === 'playing'}
                     accessibleHintsEnabled={accessibleHintsEnabled}
-                    actionRequest={actionRequest}
+                    actionQueue={actionQueue}
+                    actionQueueVersion={actionQueueVersion}
                     onSnapshot={setSnapshot}
                     onFinish={finishRun}
                   />
@@ -752,7 +993,13 @@ function App() {
                       <span>
                         {screen === 'paused'
                           ? '暫停中'
-                          : snapshot.combo > 1
+                          : snapshot.cue?.kind === 'hold' && slideHeld
+                            ? '滑行中；最後一座低門通過後放開。'
+                            : snapshot.cue
+                              ? snapshot.cue.text
+                              : slideHeld
+                                ? '滑行中，放開即可恢復跑步。'
+                                : snapshot.combo > 1
                             ? `連續收集 × ${snapshot.combo}`
                             : '自動向前奔跑'}
                       </span>
@@ -770,19 +1017,34 @@ function App() {
                         <kbd>Space / ↑ / W</kbd>
                       </button>
                       <button
-                        className="touch-button touch-slide"
+                        ref={slideButtonRef}
+                        className={`touch-button touch-slide${slideHeld ? ' touch-slide-held' : ''}`}
                         type="button"
-                        aria-label="滑行（向下鍵或 S）"
-                        onClick={() => sendAction('slide')}
+                        aria-label={
+                          slideHeld
+                            ? '滑行中，放開即可恢復跑步'
+                            : '按住滑行；向下鍵或 S，聚焦按鈕時也可按住 Space 或 Enter；放開即恢復跑步'
+                        }
+                        aria-keyshortcuts="ArrowDown S Space Enter"
+                        onPointerDown={beginSlidePointer}
+                        onPointerUp={endSlidePointer}
+                        onPointerCancel={endSlidePointer}
+                        onLostPointerCapture={endSlidePointer}
+                        onKeyDown={beginSlideButtonKey}
+                        onKeyUp={endSlideButtonKey}
+                        onClick={handleSlideButtonClick}
                         disabled={screen !== 'playing'}
                       >
                         <span className="touch-icon">⌄</span>
-                        <span>滑行</span>
-                        <kbd>↓ / S</kbd>
+                        <span>{slideHeld ? '滑行中' : '滑行'}</span>
+                        <kbd>{slideHeld ? '放開恢復跑步' : '按住 ↓ / S'}</kbd>
                       </button>
                     </div>
                   </div>
                 )}
+                <p className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">
+                  {slideAnnouncement}
+                </p>
               </section>
 
               <aside className="mission-panel">
@@ -812,8 +1074,8 @@ function App() {
                   </div>
                   <div className="guide-row">
                     <span className="guide-visual guide-arch">⌒</span>
-                    <span><strong>低矮拱門</strong><small>按滑行通過</small></span>
-                    <kbd>↓</kbd>
+                    <span><strong>連續低門</strong><small>按住滑行；最後一座通過後放開</small></span>
+                    <kbd>↓ / S</kbd>
                   </div>
                 </div>
 

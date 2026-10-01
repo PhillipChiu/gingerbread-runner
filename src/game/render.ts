@@ -1,5 +1,6 @@
 import {
   GROUND_Y,
+  isPlayerSliding,
   PLAYER_CENTER_X,
   WORLD_HEIGHT,
   WORLD_WIDTH,
@@ -10,8 +11,11 @@ import {
 import {
   getRunnerAnimationPose,
   RUNNER_FRAME_COUNT,
+  RUNNER_DRAW_BOUNDS,
+  selectRunnerAnimation,
+  SLIDE_DRAW_BOUNDS,
 } from './runnerAnimation';
-import type { SpriteFrame } from './sprites';
+import type { RunnerSpriteFrames } from './sprites';
 
 function drawCloud(
   context: CanvasRenderingContext2D,
@@ -269,16 +273,20 @@ function drawPickup(
 function drawRunner(
   context: CanvasRenderingContext2D,
   state: GameState,
-  frames: SpriteFrame[] | null,
+  frames: RunnerSpriteFrames | null,
   reduceMotion: boolean,
 ): void {
   const jumping = state.player.jumpHeight > 0;
-  const sliding = state.player.slideRemaining > 0;
-  const pose = getRunnerAnimationPose(
+  const sliding = isPlayerSliding(state.player);
+  const actionFrames = frames?.[sliding ? 'slide' : 'run'];
+  const animation = selectRunnerAnimation(
+    sliding,
     state.elapsed,
-    frames?.length ?? RUNNER_FRAME_COUNT,
+    state.player.slideElapsed,
+    actionFrames?.length ?? RUNNER_FRAME_COUNT,
     reduceMotion,
   );
+  const pose = animation.pose;
   const contactScale =
     !jumping && !sliding && !reduceMotion
       ? 0.96 + pose.contactStrength * 0.08
@@ -305,10 +313,7 @@ function drawRunner(
 
   drawWindStreaks(context, state, pose, jumping, sliding, reduceMotion);
 
-  const frame =
-    frames && frames.length > 0
-      ? frames[pose.frameIndex]
-      : undefined;
+  const frame = actionFrames?.[pose.frameIndex];
   if (!frame) {
     drawFallbackRunner(context, state, sliding, pose, reduceMotion);
     drawFootstepDust(context, pose, jumping, sliding, reduceMotion);
@@ -324,11 +329,24 @@ function drawRunner(
   context.save();
 
   if (sliding) {
-    context.drawImage(frame, PLAYER_CENTER_X - 64, GROUND_Y - 72, 128, 72);
+    const scale = Math.min(
+      SLIDE_DRAW_BOUNDS.width / frame.width,
+      SLIDE_DRAW_BOUNDS.height / frame.height,
+    );
+    const width = frame.width * scale;
+    const height = frame.height * scale;
+    context.drawImage(
+      frame,
+      PLAYER_CENTER_X - width / 2,
+      GROUND_Y - height,
+      width,
+      height,
+    );
   } else {
-    const maxWidth = 126;
-    const maxHeight = 120;
-    const scale = Math.min(maxWidth / frame.width, maxHeight / frame.height);
+    const scale = Math.min(
+      RUNNER_DRAW_BOUNDS.width / frame.width,
+      RUNNER_DRAW_BOUNDS.height / frame.height,
+    );
     const width = frame.width * scale;
     const height = frame.height * scale;
     const impact = jumping || reduceMotion ? 0 : pose.contactStrength;
@@ -565,7 +583,7 @@ function drawFootstepDust(
 export function drawGameScene(
   context: CanvasRenderingContext2D,
   state: GameState,
-  frames: SpriteFrame[] | null,
+  frames: RunnerSpriteFrames | null,
   reduceMotion = false,
 ): void {
   context.clearRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);

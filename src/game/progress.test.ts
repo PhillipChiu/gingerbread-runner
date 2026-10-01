@@ -27,7 +27,6 @@ describe('local progress', () => {
     const nearFinish = {
       ...initial,
       distance: level.distanceGoal - 1,
-      nextObstacleIn: 5,
       nextPickupIn: 5,
     };
     const clearedRun = advanceGame(nearFinish, 0.05, () => 0.9);
