@@ -3499,8 +3499,9 @@ kbd,
   touch-action: none;
 }
 
-.touch-slide-held:not(:disabled) {
+.touch-button.touch-slide-held:not(:disabled) {
   border-color: #d5f0e5;
+  color: var(--slide-ink);
   background: #83bdb4;
   box-shadow:
     inset 0 2px 7px rgba(23, 56, 64, 0.2),
@@ -3508,8 +3509,30 @@ kbd,
   transform: translateY(1px);
 }
 
-.touch-slide-held:not(:disabled) .touch-icon {
-  color: #173840;
+.touch-button.touch-slide-held:not(:disabled) .touch-icon {
+  color: var(--slide-ink);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .touch-button.touch-slide:hover:not(:disabled) {
+    border-color: #70a99e;
+    color: var(--slide-ink);
+    background: #b8e2dc;
+  }
+
+  .touch-button.touch-slide-held:hover:not(:disabled) {
+    border-color: #315f59;
+    background: #8fc7bd;
+    box-shadow:
+      inset 0 2px 7px rgba(23, 56, 64, 0.25),
+      0 2px 8px rgba(3, 18, 23, 0.22);
+    transform: translateY(1px);
+  }
+}
+
+.touch-button.touch-slide-held:active:not(:disabled),
+.touch-button.touch-slide-held:hover:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 @media (max-width: 767px) and (orientation: portrait) {
