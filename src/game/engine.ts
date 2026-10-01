@@ -12,7 +12,12 @@ import {
   STUMP_JUMP_CLEARANCE,
   getRunSpeed,
 } from './physics';
-import { RUNNER_DRAW_BOUNDS, SLIDE_DRAW_BOUNDS } from './runnerAnimation';
+import {
+  getRunnerAnimationPose,
+  RUNNER_DRAW_BOUNDS,
+  RUNNER_FRAME_COUNT,
+  SLIDE_DRAW_BOUNDS,
+} from './runnerAnimation';
 
 export { getRunSpeed } from './physics';
 
@@ -23,6 +28,8 @@ export const PLAYER_X = 174;
 export const PLAYER_WIDTH = 72;
 export const PLAYER_CENTER_X = PLAYER_X + PLAYER_WIDTH / 2;
 export const PICKUP_TOUCH_RADIUS = 18;
+export const PICKUP_BOB_ANGULAR_SPEED = 5;
+export const PICKUP_BOB_AMPLITUDE = 4;
 
 export const CUSTOM_GAME_TUNING = {
   startingEnergy: 100,
@@ -109,18 +116,34 @@ export function isPlayerSliding(player: PlayerState): boolean {
   );
 }
 
-function overlapsRunnerPickup(pickup: Pickup, player: PlayerState): boolean {
-  const bounds = isPlayerSliding(player)
+function overlapsRunnerPickup(
+  pickup: Pickup,
+  player: PlayerState,
+  elapsed: number,
+  reduceMotion: boolean,
+): boolean {
+  const sliding = isPlayerSliding(player);
+  const bounds = sliding
     ? SLIDE_DRAW_BOUNDS
     : RUNNER_DRAW_BOUNDS;
-  const baseline = GROUND_Y - player.jumpHeight;
+  const pose = getRunnerAnimationPose(elapsed, RUNNER_FRAME_COUNT, reduceMotion);
+  const baseline =
+    GROUND_Y -
+    player.jumpHeight +
+    (sliding || player.jumpHeight > 0 ? 0 : pose.bobOffset);
+  const pickupY =
+    pickup.y +
+    (reduceMotion
+      ? 0
+      : Math.sin(elapsed * PICKUP_BOB_ANGULAR_SPEED + pickup.id) *
+        PICKUP_BOB_AMPLITUDE);
   const left = PLAYER_CENTER_X - bounds.width / 2;
   const right = PLAYER_CENTER_X + bounds.width / 2;
   const top = baseline - bounds.height;
   const nearestX = Math.max(left, Math.min(pickup.x, right));
-  const nearestY = Math.max(top, Math.min(pickup.y, baseline));
+  const nearestY = Math.max(top, Math.min(pickupY, baseline));
   const offsetX = pickup.x - nearestX;
-  const offsetY = pickup.y - nearestY;
+  const offsetY = pickupY - nearestY;
 
   return (
     offsetX * offsetX + offsetY * offsetY <=
@@ -214,6 +237,7 @@ export function advanceGame(
   state: GameState,
   deltaSeconds: number,
   random: () => number = Math.random,
+  reduceMotion = false,
 ): GameState {
   if (state.status !== 'running') {
     return state;
@@ -362,7 +386,7 @@ export function advanceGame(
       continue;
     }
 
-    if (overlapsRunnerPickup(pickup, player)) {
+    if (overlapsRunnerPickup(pickup, player, elapsed, reduceMotion)) {
       collectibles += 1;
       combo += 1;
       score +=

@@ -354,6 +354,28 @@ describe('runner state', () => {
     expect(collected.score).toBeGreaterThan(baseline.score);
   });
 
+  it('collects a bobbing fruit when it clips the jumping runner bounds', () => {
+    const delta = 0.05;
+    const pickupId = 1;
+    const initial = createGameState(LEVELS[0]!);
+    const state = {
+      ...initial,
+      elapsed: (Math.PI * 1.5 - pickupId) / 5 - delta,
+      energy: 60,
+      nextPickupIn: 5,
+      obstacleSections: [],
+      player: { ...initial.player, jumpHeight: 7, jumpVelocity: 657 },
+      pickups: [{ id: pickupId, x: PLAYER_CENTER_X + 76.5, y: 306 }],
+    };
+    const collected = advanceGame(state, delta, () => 0.9);
+    const reducedMotion = advanceGame(state, delta, () => 0.9, true);
+
+    expect(collected.collectibles).toBe(1);
+    expect(collected.pickups).toHaveLength(0);
+    expect(reducedMotion.collectibles).toBe(0);
+    expect(reducedMotion.pickups).toHaveLength(1);
+  });
+
   it('places level obstacles at deterministic first-contact distances', () => {
     const level = LEVELS[0]!;
     const section = expandObstaclePattern(level).sections[0]!;
