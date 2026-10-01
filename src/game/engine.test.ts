@@ -4,6 +4,7 @@ import {
   applyPlayerAction,
   createGameState,
   getRunSpeed,
+  PICKUP_BOB_ANGULAR_SPEED,
   PLAYER_CENTER_X,
   PLAYER_WIDTH,
   PLAYER_X,
@@ -354,18 +355,19 @@ describe('runner state', () => {
     expect(collected.score).toBeGreaterThan(baseline.score);
   });
 
-  it('collects a bobbing fruit when it clips the jumping runner bounds', () => {
+  it('collects a bobbing fruit when it touches the jumping runner', () => {
     const delta = 0.05;
     const pickupId = 1;
     const initial = createGameState(LEVELS[0]!);
     const state = {
       ...initial,
-      elapsed: (Math.PI * 1.5 - pickupId) / 5 - delta,
+      elapsed:
+        (Math.PI * 1.5 - pickupId) / PICKUP_BOB_ANGULAR_SPEED - delta,
       energy: 60,
       nextPickupIn: 5,
       obstacleSections: [],
       player: { ...initial.player, jumpHeight: 7, jumpVelocity: 657 },
-      pickups: [{ id: pickupId, x: PLAYER_CENTER_X + 76.5, y: 306 }],
+      pickups: [{ id: pickupId, x: PLAYER_CENTER_X + 12, y: 306 }],
     };
     const collected = advanceGame(state, delta, () => 0.9);
     const reducedMotion = advanceGame(state, delta, () => 0.9, true);

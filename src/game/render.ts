@@ -1,8 +1,7 @@
 import {
   GROUND_Y,
+  getPickupRenderY,
   isPlayerSliding,
-  PICKUP_BOB_AMPLITUDE,
-  PICKUP_BOB_ANGULAR_SPEED,
   PICKUP_TOUCH_RADIUS,
   PLAYER_CENTER_X,
   WORLD_HEIGHT,
@@ -241,11 +240,7 @@ function drawPickup(
   elapsed: number,
   reduceMotion: boolean,
 ): void {
-  const bob = reduceMotion
-    ? 0
-    : Math.sin(elapsed * PICKUP_BOB_ANGULAR_SPEED + pickup.id) *
-      PICKUP_BOB_AMPLITUDE;
-  const y = pickup.y + bob;
+  const y = getPickupRenderY(pickup, elapsed, reduceMotion);
   context.save();
   context.shadowColor = '#fff4ad';
   context.shadowBlur = 16;

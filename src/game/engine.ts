@@ -116,6 +116,20 @@ export function isPlayerSliding(player: PlayerState): boolean {
   );
 }
 
+export function getPickupRenderY(
+  pickup: Pickup,
+  elapsed: number,
+  reduceMotion = false,
+): number {
+  return (
+    pickup.y +
+    (reduceMotion
+      ? 0
+      : Math.sin(elapsed * PICKUP_BOB_ANGULAR_SPEED + pickup.id) *
+        PICKUP_BOB_AMPLITUDE)
+  );
+}
+
 function overlapsRunnerPickup(
   pickup: Pickup,
   player: PlayerState,
@@ -131,12 +145,7 @@ function overlapsRunnerPickup(
     GROUND_Y -
     player.jumpHeight +
     (sliding || player.jumpHeight > 0 ? 0 : pose.bobOffset);
-  const pickupY =
-    pickup.y +
-    (reduceMotion
-      ? 0
-      : Math.sin(elapsed * PICKUP_BOB_ANGULAR_SPEED + pickup.id) *
-        PICKUP_BOB_AMPLITUDE);
+  const pickupY = getPickupRenderY(pickup, elapsed, reduceMotion);
   const left = PLAYER_CENTER_X - bounds.width / 2;
   const right = PLAYER_CENTER_X + bounds.width / 2;
   const top = baseline - bounds.height;
