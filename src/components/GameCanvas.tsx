@@ -3,51 +3,33 @@ import {
   advanceGame,
   applyPlayerAction,
   createGameState,
-  getRunSpeed,
-  PLAYER_WIDTH,
-  PLAYER_X,
   toGameSnapshot,
   WORLD_HEIGHT,
   WORLD_WIDTH,
   type GameSnapshot,
   type GameState,
-  type ObstacleType,
-  type PlayerAction,
 } from '../game/engine';
 import { drawGameScene } from '../game/render';
-import { loadCharacterFrames, type SpriteFrame } from '../game/sprites';
+import {
+  loadRunnerSpriteFrames,
+  type RunnerSpriteFrames,
+} from '../game/sprites';
 import type { LevelConfig } from '../game/levels';
-
-export interface ActionRequest {
-  id: number;
-  action: PlayerAction;
-}
+import { getObstacleCue } from '../game/obstaclePattern';
+import type { OrderedPlayerActionQueue } from '../game/input';
 
 interface GameCanvasProps {
   level: LevelConfig;
   runKey: number;
   isRunning: boolean;
   accessibleHintsEnabled: boolean;
-  actionRequest: ActionRequest | null;
+  actionQueue: OrderedPlayerActionQueue;
+  actionQueueVersion: number;
   onSnapshot: (snapshot: GameSnapshot) => void;
   onFinish: (state: GameState) => void;
 }
 
 interface LatestProps extends GameCanvasProps {}
-
-const OBSTACLE_HINT_LEAD_SECONDS = 1.25;
-const OBSTACLE_HINT_COOLDOWN_SECONDS = 1.1;
-
-function getObstacleHint(type: ObstacleType): string {
-  switch (type) {
-    case 'arch':
-      return '低矮拱門，請滑行。';
-    case 'gap':
-      return '裂隙，請跳躍。';
-    default:
-      return '樹樁，請跳躍。';
-  }
-}
 
 export default function GameCanvas(props: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -65,7 +47,6 @@ export default function GameCanvas(props: GameCanvasProps) {
   useEffect(() => {
     let animationFrame: number | null = null;
     let currentRunKey = -1;
-    let processedActionId = -1;
     let lastFrameAt = 0;
     let lastSnapshotAt = 0;
     let finishNotified = false;
@@ -73,13 +54,12 @@ export default function GameCanvas(props: GameCanvasProps) {
     let wasActive = false;
     let hintsWereEnabled = false;
     let terminalAnnouncementRunKey = -1;
-    let lastObstacleAnnouncementAt = Number.NEGATIVE_INFINITY;
+    let lastObstacleCueKey = '';
     let state: GameState | null = null;
-    let frames: SpriteFrame[] | null = null;
+    let frames: RunnerSpriteFrames | null = null;
     let active = true;
     const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
     let reduceMotion = motionPreference.matches;
-    const announcedObstacleIds = new Set<number>();
     let render: (now: number) => void = () => {};
 
     const scheduleFrame = (): void => {
@@ -94,7 +74,7 @@ export default function GameCanvas(props: GameCanvasProps) {
     };
     motionPreference.addEventListener('change', onMotionPreferenceChange);
 
-    void loadCharacterFrames()
+    void loadRunnerSpriteFrames()
       .then((loadedFrames) => {
         if (active) {
           frames = loadedFrames;
@@ -120,23 +100,19 @@ export default function GameCanvas(props: GameCanvasProps) {
       if (!state || currentRunKey !== currentProps.runKey) {
         state = createGameState(currentProps.level);
         currentRunKey = currentProps.runKey;
-        processedActionId = currentProps.actionRequest?.id ?? -1;
         finishNotified = false;
         lastSnapshotAt = 0;
         lastFrameAt = 0;
         terminalAnnouncementRunKey = -1;
-        lastObstacleAnnouncementAt = Number.NEGATIVE_INFINITY;
-        announcedObstacleIds.clear();
+        lastObstacleCueKey = '';
         wasActive = false;
         isNewRun = true;
       }
 
-      if (
-        currentProps.actionRequest &&
-        currentProps.actionRequest.id !== processedActionId
-      ) {
-        processedActionId = currentProps.actionRequest.id;
-        state = applyPlayerAction(state, currentProps.actionRequest.action);
+      for (const request of currentProps.actionQueue.drain()) {
+        if (request.runKey === currentRunKey) {
+          state = applyPlayerAction(state, request.action);
+        }
       }
 
       if (currentProps.accessibleHintsEnabled && (isNewRun || !hintsWereEnabled)) {
@@ -199,28 +175,12 @@ export default function GameCanvas(props: GameCanvasProps) {
               : `第 ${currentProps.level.id} 關結束，體力已耗盡。`,
           );
         } else if (state.status === 'running') {
-          const warningDistance =
-            getRunSpeed(state.level, state.distance) *
-            OBSTACLE_HINT_LEAD_SECONDS;
-          const nextObstacle = state.obstacles
-            .filter(
-              (obstacle) =>
-                !announcedObstacleIds.has(obstacle.id) &&
-                obstacle.x <= PLAYER_X + PLAYER_WIDTH + warningDistance &&
-                obstacle.x + obstacle.width > PLAYER_X + PLAYER_WIDTH,
-            )
-            .sort((left, right) => left.x - right.x)[0];
-
-          if (
-            nextObstacle &&
-            state.elapsed - lastObstacleAnnouncementAt >=
-              OBSTACLE_HINT_COOLDOWN_SECONDS
-          ) {
-            announcedObstacleIds.add(nextObstacle.id);
-            lastObstacleAnnouncementAt = state.elapsed;
-            setLiveAnnouncement(
-              `前方第 ${announcedObstacleIds.size} 個障礙：${getObstacleHint(nextObstacle.type)}`,
-            );
+          const cue = getObstacleCue(state.level, state.distance);
+          if (cue && cue.key !== lastObstacleCueKey) {
+            lastObstacleCueKey = cue.key;
+            setLiveAnnouncement(cue.text);
+          } else if (!cue) {
+            lastObstacleCueKey = '';
           }
         }
       }
@@ -246,7 +206,7 @@ export default function GameCanvas(props: GameCanvasProps) {
 
   useEffect(() => {
     scheduleFrameRef.current?.();
-  }, [props.isRunning, props.runKey, props.actionRequest?.id]);
+  }, [props.isRunning, props.runKey, props.actionQueueVersion]);
 
   return (
     <>

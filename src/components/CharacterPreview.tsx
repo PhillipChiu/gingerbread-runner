@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { RUNNER_FRAMES_PER_SECOND } from '../game/runnerAnimation';
-import { loadCharacterFrames } from '../game/sprites';
+import { loadRunnerSpriteFrames } from '../game/sprites';
 
 const PREVIEW_FRAMES_PER_SECOND = RUNNER_FRAMES_PER_SECOND;
 
@@ -38,7 +38,7 @@ export default function CharacterPreview() {
 
   useEffect(() => {
     let animationFrame: number | null = null;
-    let frames: Awaited<ReturnType<typeof loadCharacterFrames>> | null = null;
+    let frames: Awaited<ReturnType<typeof loadRunnerSpriteFrames>> | null = null;
     let active = true;
     let startedAt = 0;
     const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -57,15 +57,15 @@ export default function CharacterPreview() {
       }
       context.clearRect(0, 0, canvas.width, canvas.height);
 
-      if (frames && frames.length > 0) {
+      if (frames && frames.run.length > 0) {
         const elapsed = getElapsedSeconds(now, startedAt);
         const frameIndex = getCharacterPreviewFrameIndex(
           now,
           startedAt,
-          frames.length,
+          frames.run.length,
           reduceMotion,
         );
-        const frame = frames[frameIndex];
+        const frame = frames.run[frameIndex];
 
         if (frame) {
           const scale = Math.min(208 / frame.width, 186 / frame.height);
@@ -99,7 +99,7 @@ export default function CharacterPreview() {
       redraw();
     };
 
-    void loadCharacterFrames()
+    void loadRunnerSpriteFrames()
       .then((loadedFrames) => {
         if (active) {
           frames = loadedFrames;

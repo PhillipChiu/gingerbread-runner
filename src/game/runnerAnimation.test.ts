@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getRunnerAnimationPose,
   getRunnerFrameLayout,
+  selectRunnerAnimation,
   RUNNER_BODY_BOB_AMPLITUDE,
   RUNNER_CYCLE_SECONDS,
   RUNNER_FRAMES_PER_SECOND,
@@ -80,6 +81,23 @@ describe('runner animation timing', () => {
     expect(pose.stride).toBe(0);
     expect(pose.stepIndex).toBe(0);
     expect(pose.contactStrength).toBe(0);
+  });
+});
+
+describe('run and slide frame selection', () => {
+  it('starts a held slide at frame one and loops independently from the run cycle', () => {
+    expect(selectRunnerAnimation(false, 0.2, 0, 12).action).toBe('run');
+    expect(selectRunnerAnimation(false, 0.2, 0, 12).pose.frameIndex).toBe(3);
+    expect(selectRunnerAnimation(true, 8, 0, 12)).toMatchObject({
+      action: 'slide',
+      pose: { frameIndex: 0 },
+    });
+    expect(selectRunnerAnimation(true, 8, 1 / 18, 12).pose.frameIndex).toBe(1);
+    expect(selectRunnerAnimation(true, 8, 1, 12).pose.frameIndex).toBe(6);
+    expect(selectRunnerAnimation(true, 8, 0.72, 12, true)).toMatchObject({
+      action: 'slide',
+      pose: { frameIndex: 0 },
+    });
   });
 });
 

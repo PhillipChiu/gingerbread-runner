@@ -1,93 +1,19 @@
-import characterSheetUrl from '../../main_character.png';
+import runnerSpriteAtlasUrl from '../../run_and_slide.png';
 import { getRunnerFrameLayout } from './runnerAnimation';
+import {
+  getActionFrameCrops,
+  makeCheckerboardTransparent,
+  type SpriteAction,
+} from './spriteAtlas';
 
 export type SpriteFrame = HTMLCanvasElement;
 
-const FRAME_SOURCE_WIDTH = 384;
-const FRAME_SOURCE_HEIGHT = 1024 / 3;
-const FRAME_CROP_X = 16;
-const FRAME_CROP_WIDTH = 354;
-// Stop each row crop above its numbered badge before the poses are keyed and trimmed.
-const FRAME_ROWS = [
-  { top: 28, height: 292 },
-  { top: 32, height: 270 },
-  { top: 17, height: 257 },
-] as const;
-
-let characterFramesPromise: Promise<SpriteFrame[]> | null = null;
-
-function isLikelyBackground(red: number, green: number, blue: number): boolean {
-  const lightest = Math.max(red, green, blue);
-  const darkest = Math.min(red, green, blue);
-  return darkest >= 212 && lightest - darkest <= 12;
+export interface RunnerSpriteFrames {
+  run: SpriteFrame[];
+  slide: SpriteFrame[];
 }
 
-function makeTransparentBackground(frame: HTMLCanvasElement): void {
-  const context = frame.getContext('2d', { willReadFrequently: true });
-  if (!context) {
-    return;
-  }
-
-  const image = context.getImageData(0, 0, frame.width, frame.height);
-  const pixels = image.data;
-  const pixelCount = frame.width * frame.height;
-  const visited = new Uint8Array(pixelCount);
-  const queue = new Int32Array(pixelCount);
-  let head = 0;
-  let tail = 0;
-
-  const addIfBackground = (x: number, y: number): void => {
-    if (x < 0 || x >= frame.width || y < 0 || y >= frame.height) {
-      return;
-    }
-
-    const pixelIndex = y * frame.width + x;
-    if (visited[pixelIndex]) {
-      return;
-    }
-
-    const colorOffset = pixelIndex * 4;
-    if (
-      isLikelyBackground(
-        pixels[colorOffset]!,
-        pixels[colorOffset + 1]!,
-        pixels[colorOffset + 2]!,
-      )
-    ) {
-      visited[pixelIndex] = 1;
-      queue[tail] = pixelIndex;
-      tail += 1;
-    }
-  };
-
-  for (let x = 0; x < frame.width; x += 1) {
-    addIfBackground(x, 0);
-    addIfBackground(x, frame.height - 1);
-  }
-  for (let y = 1; y < frame.height - 1; y += 1) {
-    addIfBackground(0, y);
-    addIfBackground(frame.width - 1, y);
-  }
-
-  while (head < tail) {
-    const pixelIndex = queue[head]!;
-    head += 1;
-    const x = pixelIndex % frame.width;
-    const y = Math.floor(pixelIndex / frame.width);
-    addIfBackground(x - 1, y);
-    addIfBackground(x + 1, y);
-    addIfBackground(x, y - 1);
-    addIfBackground(x, y + 1);
-  }
-
-  for (let index = 0; index < pixelCount; index += 1) {
-    if (visited[index]) {
-      pixels[index * 4 + 3] = 0;
-    }
-  }
-
-  context.putImageData(image, 0, 0);
-}
+let characterFramesPromise: Promise<RunnerSpriteFrames> | null = null;
 
 function keepLargestForegroundComponent(frame: HTMLCanvasElement): void {
   const context = frame.getContext('2d', { willReadFrequently: true });
@@ -207,15 +133,15 @@ function trimFrame(source: HTMLCanvasElement): HTMLCanvasElement {
   return trimmed;
 }
 
-function createFrames(image: HTMLImageElement): SpriteFrame[] {
+function createActionFrames(
+  image: HTMLImageElement,
+  action: SpriteAction,
+): SpriteFrame[] {
   const frames: SpriteFrame[] = [];
 
-  for (let index = 0; index < 12; index += 1) {
-    const column = index % 4;
-    const row = Math.floor(index / 4);
-    const crop = FRAME_ROWS[row]!;
+  for (const crop of getActionFrameCrops(action)) {
     const frame = document.createElement('canvas');
-    frame.width = FRAME_CROP_WIDTH;
+    frame.width = crop.width;
     frame.height = crop.height;
     const context = frame.getContext('2d', { willReadFrequently: true });
 
@@ -225,16 +151,18 @@ function createFrames(image: HTMLImageElement): SpriteFrame[] {
 
     context.drawImage(
       image,
-      column * FRAME_SOURCE_WIDTH + FRAME_CROP_X,
-      row * FRAME_SOURCE_HEIGHT + crop.top,
-      FRAME_CROP_WIDTH,
+      crop.x,
+      crop.y,
+      crop.width,
       crop.height,
       0,
       0,
-      FRAME_CROP_WIDTH,
+      crop.width,
       crop.height,
     );
-    makeTransparentBackground(frame);
+    const pixels = context.getImageData(0, 0, frame.width, frame.height);
+    makeCheckerboardTransparent(pixels.data, frame.width, frame.height);
+    context.putImageData(pixels, 0, 0);
     keepLargestForegroundComponent(frame);
     frames.push(trimFrame(frame));
   }
@@ -251,16 +179,23 @@ function createFrames(image: HTMLImageElement): SpriteFrame[] {
   });
 }
 
-export function loadCharacterFrames(): Promise<SpriteFrame[]> {
+function createFrames(image: HTMLImageElement): RunnerSpriteFrames {
+  return {
+    run: createActionFrames(image, 'run'),
+    slide: createActionFrames(image, 'slide'),
+  };
+}
+
+export function loadRunnerSpriteFrames(): Promise<RunnerSpriteFrames> {
   if (characterFramesPromise) {
     return characterFramesPromise;
   }
 
-  characterFramesPromise = new Promise<SpriteFrame[]>((resolve, reject) => {
+  characterFramesPromise = new Promise<RunnerSpriteFrames>((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve(createFrames(image));
     image.onerror = () => reject(new Error('無法載入角色圖片'));
-    image.src = characterSheetUrl;
+    image.src = runnerSpriteAtlasUrl;
   });
 
   return characterFramesPromise;
