@@ -12,6 +12,7 @@ import {
   STUMP_JUMP_CLEARANCE,
   getRunSpeed,
 } from './physics';
+import { RUNNER_DRAW_BOUNDS, SLIDE_DRAW_BOUNDS } from './runnerAnimation';
 
 export { getRunSpeed } from './physics';
 
@@ -21,6 +22,7 @@ export const GROUND_Y = 326;
 export const PLAYER_X = 174;
 export const PLAYER_WIDTH = 72;
 export const PLAYER_CENTER_X = PLAYER_X + PLAYER_WIDTH / 2;
+export const PICKUP_TOUCH_RADIUS = 18;
 
 export const CUSTOM_GAME_TUNING = {
   startingEnergy: 100,
@@ -94,8 +96,6 @@ export interface GameSnapshot {
 }
 
 const PICKUP_HEIGHTS = [150, 270, 306, 270] as const;
-const PICKUP_VERTICAL_TOLERANCE = 32;
-const SLIDE_PICKUP_CENTER_OFFSET = 20;
 const PLAYER_HITBOX_LEFT = PLAYER_X + 7;
 const PLAYER_HITBOX_RIGHT = PLAYER_X + PLAYER_WIDTH - 6;
 const OBSTACLE_SPAWN_RIGHT_EDGE = WORLD_WIDTH + 48;
@@ -106,6 +106,25 @@ export function isPlayerSliding(player: PlayerState): boolean {
     player.slideHeld &&
     player.jumpHeight === 0 &&
     player.jumpVelocity === 0
+  );
+}
+
+function overlapsRunnerPickup(pickup: Pickup, player: PlayerState): boolean {
+  const bounds = isPlayerSliding(player)
+    ? SLIDE_DRAW_BOUNDS
+    : RUNNER_DRAW_BOUNDS;
+  const baseline = GROUND_Y - player.jumpHeight;
+  const left = PLAYER_CENTER_X - bounds.width / 2;
+  const right = PLAYER_CENTER_X + bounds.width / 2;
+  const top = baseline - bounds.height;
+  const nearestX = Math.max(left, Math.min(pickup.x, right));
+  const nearestY = Math.max(top, Math.min(pickup.y, baseline));
+  const offsetX = pickup.x - nearestX;
+  const offsetY = pickup.y - nearestY;
+
+  return (
+    offsetX * offsetX + offsetY * offsetY <=
+    PICKUP_TOUCH_RADIUS * PICKUP_TOUCH_RADIUS
   );
 }
 
@@ -328,11 +347,6 @@ export function advanceGame(
       state.level.pickupInterval * (0.83 + Math.min(random(), 0.99) * 0.34);
   }
 
-  const playerCenterY =
-    GROUND_Y -
-    56 -
-    player.jumpHeight +
-    (isPlayerSliding(player) ? SLIDE_PICKUP_CENTER_OFFSET : 0);
   const remainingPickups: Pickup[] = [];
 
   for (const pickup of pickups) {
@@ -348,11 +362,7 @@ export function advanceGame(
       continue;
     }
 
-    const closeEnough =
-      Math.abs(pickup.x - PLAYER_CENTER_X) < 54 &&
-      Math.abs(pickup.y - playerCenterY) < PICKUP_VERTICAL_TOLERANCE;
-
-    if (closeEnough) {
+    if (overlapsRunnerPickup(pickup, player)) {
       collectibles += 1;
       combo += 1;
       score +=

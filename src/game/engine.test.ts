@@ -323,20 +323,33 @@ describe('runner state', () => {
     expect(jumping.pickups).toHaveLength(0);
   });
 
-  it('requires a slide to collect a low energy fruit', () => {
+  it('collects a low energy fruit while sliding', () => {
     const initial = createGameState(LEVELS[0]!);
     const state = {
       ...initial,
       nextPickupIn: 5,
       pickups: [{ id: 14, x: PLAYER_CENTER_X + 12, y: 306 }],
     };
-    const standing = advanceGame(state, 0.05, () => 0.9);
     const sliding = advanceGame(applyPlayerAction(state, 'slideStart'), 0.05, () => 0.9);
 
-    expect(standing.collectibles).toBe(0);
-    expect(standing.pickups).toHaveLength(1);
     expect(sliding.collectibles).toBe(1);
     expect(sliding.pickups).toHaveLength(0);
+  });
+
+  it('collects a low energy fruit when it visibly overlaps the grounded runner', () => {
+    const initial = createGameState(LEVELS[0]!);
+    const state = {
+      ...initial,
+      energy: 60,
+      nextPickupIn: 5,
+      obstacleSections: [],
+      pickups: [{ id: 15, x: PLAYER_CENTER_X + 12, y: 306 }],
+    };
+    const collected = advanceGame(state, 0.05, () => 0.9);
+
+    expect(collected.collectibles).toBe(1);
+    expect(collected.pickups).toHaveLength(0);
+    expect(collected.energy).toBeGreaterThan(state.energy);
   });
 
   it('places level obstacles at deterministic first-contact distances', () => {

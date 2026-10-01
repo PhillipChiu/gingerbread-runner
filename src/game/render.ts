@@ -1,6 +1,7 @@
 import {
   GROUND_Y,
   isPlayerSliding,
+  PICKUP_TOUCH_RADIUS,
   PLAYER_CENTER_X,
   WORLD_HEIGHT,
   WORLD_WIDTH,
@@ -243,13 +244,20 @@ function drawPickup(
   context.save();
   context.shadowColor = '#fff4ad';
   context.shadowBlur = 16;
-  const glow = context.createRadialGradient(pickup.x, y, 2, pickup.x, y, 19);
+  const glow = context.createRadialGradient(
+    pickup.x,
+    y,
+    2,
+    pickup.x,
+    y,
+    PICKUP_TOUCH_RADIUS + 1,
+  );
   glow.addColorStop(0, '#fff8ca');
   glow.addColorStop(0.52, '#f8cf72');
   glow.addColorStop(1, 'rgba(239,166,78,0.08)');
   context.fillStyle = glow;
   context.beginPath();
-  context.arc(pickup.x, y, 18, 0, Math.PI * 2);
+  context.arc(pickup.x, y, PICKUP_TOUCH_RADIUS, 0, Math.PI * 2);
   context.fill();
   context.shadowBlur = 0;
 
