@@ -427,8 +427,8 @@ function drawFallbackRunner(
   pose: ReturnType<typeof getRunnerAnimationPose>,
   reduceMotion: boolean,
 ): void {
-  const height = sliding ? 67 : 106;
-  const width = sliding ? 104 : 84;
+  const bounds = sliding ? SLIDE_DRAW_BOUNDS : RUNNER_DRAW_BOUNDS;
+  const { height, width } = bounds;
   const x = PLAYER_CENTER_X - width / 2;
   const baseline =
     GROUND_Y -
@@ -442,9 +442,17 @@ function drawFallbackRunner(
   const compression = !sliding && !reduceMotion ? pose.contactStrength * 0.04 : 0;
   context.save();
   context.translate(PLAYER_CENTER_X, baseline);
-  context.scale(1 + compression * 0.5, 1 - compression);
+  const bodyHeight = height * (1 - compression);
   context.beginPath();
-  context.ellipse(0, -height / 2, width / 2, height / 2, -0.16, 0, Math.PI * 2);
+  context.ellipse(
+    0,
+    -bodyHeight / 2,
+    (width - context.lineWidth) / 2,
+    (bodyHeight - context.lineWidth) / 2,
+    0,
+    0,
+    Math.PI * 2,
+  );
   context.fill();
   context.stroke();
   context.fillStyle = '#262a2d';
@@ -458,7 +466,10 @@ function drawFallbackRunner(
   context.fillStyle = '#cf9571';
   context.beginPath();
   context.moveTo(width * 0.36, -height * 0.58);
-  context.lineTo(width * 0.65, -height * 0.5);
+  context.lineTo(
+    Math.min(width * 0.65, width / 2 - context.lineWidth / 2),
+    -height * 0.5,
+  );
   context.lineTo(width * 0.34, -height * 0.42);
   context.closePath();
   context.fill();
@@ -482,7 +493,7 @@ function drawFallbackRunner(
       const hipX = PLAYER_CENTER_X + direction * 9;
       const kneeX = hipX + swing * 0.5;
       const footX = PLAYER_CENTER_X + direction * 18 + swing;
-      const footY = baseline - lift;
+      const footY = baseline - 3.5 - lift;
 
       context.beginPath();
       context.moveTo(hipX, baseline - 29);
@@ -504,7 +515,7 @@ function drawFallbackRunner(
     context.beginPath();
     context.ellipse(
       x + width * 0.36,
-      baseline - 2,
+      baseline - 5,
       12,
       5,
       -0.28,
@@ -513,7 +524,7 @@ function drawFallbackRunner(
     );
     context.ellipse(
       x + width * 0.68,
-      baseline - 2,
+      baseline - 5,
       12,
       5,
       0.18,
