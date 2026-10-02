@@ -18,6 +18,7 @@ import {
   SLIDE_DRAW_BOUNDS,
 } from './runnerAnimation';
 import type { RunnerSpriteFrames } from './sprites';
+import { HIGH_STUMP_HEIGHT } from './physics';
 
 function drawCloud(
   context: CanvasRenderingContext2D,
@@ -182,6 +183,41 @@ function drawStump(context: CanvasRenderingContext2D, obstacle: Obstacle): void 
   context.stroke();
 }
 
+function drawHighStump(
+  context: CanvasRenderingContext2D,
+  obstacle: Obstacle,
+): void {
+  const { x, width } = obstacle;
+  const height = HIGH_STUMP_HEIGHT;
+  const y = GROUND_Y - height;
+  const bark = context.createLinearGradient(x, y, x + width, y + height);
+  bark.addColorStop(0, '#695044');
+  bark.addColorStop(0.48, '#9a6347');
+  bark.addColorStop(1, '#543e3b');
+  roundedRect(context, x + 3, y + 7, width - 6, height - 7, 7);
+  context.fillStyle = bark;
+  context.fill();
+
+  context.fillStyle = '#d9b57e';
+  context.beginPath();
+  context.ellipse(x + width / 2, y + 8, width / 2 - 1, 8, 0, 0, Math.PI * 2);
+  context.fill();
+  context.strokeStyle = '#8b5a43';
+  context.lineWidth = 2;
+  context.beginPath();
+  context.ellipse(x + width / 2, y + 8, width / 4, 3.5, 0, 0, Math.PI * 2);
+  context.stroke();
+
+  context.strokeStyle = 'rgba(55,39,34,0.72)';
+  context.lineWidth = 3;
+  context.beginPath();
+  context.moveTo(x + width * 0.35, y + 28);
+  context.lineTo(x + width * 0.35, GROUND_Y - 15);
+  context.moveTo(x + width * 0.7, y + 44);
+  context.lineTo(x + width * 0.62, GROUND_Y - 32);
+  context.stroke();
+}
+
 function drawArch(context: CanvasRenderingContext2D, obstacle: Obstacle): void {
   const { x, width } = obstacle;
   const postWidth = 13;
@@ -229,6 +265,8 @@ function drawObstacle(context: CanvasRenderingContext2D, obstacle: Obstacle): vo
     drawGap(context, obstacle);
   } else if (obstacle.type === 'arch') {
     drawArch(context, obstacle);
+  } else if (obstacle.type === 'highStump') {
+    drawHighStump(context, obstacle);
   } else {
     drawStump(context, obstacle);
   }

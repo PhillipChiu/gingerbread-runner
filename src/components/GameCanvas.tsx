@@ -3,6 +3,7 @@ import {
   advanceGame,
   applyPlayerAction,
   createGameState,
+  getDoubleJumpStatus,
   toGameSnapshot,
   WORLD_HEIGHT,
   WORLD_WIDTH,
@@ -55,6 +56,11 @@ export default function GameCanvas(props: GameCanvasProps) {
     let hintsWereEnabled = false;
     let terminalAnnouncementRunKey = -1;
     let lastObstacleCueKey = '';
+    let lastDoubleJumpStatus: ReturnType<typeof getDoubleJumpStatus> | null =
+      null;
+    let lastSnapshotDoubleJumpStatus: ReturnType<
+      typeof getDoubleJumpStatus
+    > | null = null;
     let state: GameState | null = null;
     let frames: RunnerSpriteFrames | null = null;
     let active = true;
@@ -105,6 +111,8 @@ export default function GameCanvas(props: GameCanvasProps) {
         lastFrameAt = 0;
         terminalAnnouncementRunKey = -1;
         lastObstacleCueKey = '';
+        lastDoubleJumpStatus = 'recovered';
+        lastSnapshotDoubleJumpStatus = null;
         wasActive = false;
         isNewRun = true;
       }
@@ -150,12 +158,20 @@ export default function GameCanvas(props: GameCanvasProps) {
 
       const isActive =
         currentProps.isRunning && state.status === 'running';
-      if (isActive && (lastSnapshotAt === 0 || now - lastSnapshotAt >= 120)) {
+      const doubleJumpStatus = getDoubleJumpStatus(state.player);
+      if (
+        isActive &&
+        (lastSnapshotAt === 0 ||
+          now - lastSnapshotAt >= 120 ||
+          lastSnapshotDoubleJumpStatus !== doubleJumpStatus)
+      ) {
         currentProps.onSnapshot(toGameSnapshot(state));
         lastSnapshotAt = now;
+        lastSnapshotDoubleJumpStatus = doubleJumpStatus;
       } else if (!isActive && (wasActive || !hasDrawn)) {
         currentProps.onSnapshot(toGameSnapshot(state));
         lastSnapshotAt = 0;
+        lastSnapshotDoubleJumpStatus = doubleJumpStatus;
       }
 
       if (state.status !== 'running' && !finishNotified) {
@@ -175,14 +191,40 @@ export default function GameCanvas(props: GameCanvasProps) {
               : `第 ${currentProps.level.id} 關結束，體力已耗盡。`,
           );
         } else if (state.status === 'running') {
-          const cue = getObstacleCue(state.level, state.distance);
+          const cue = getObstacleCue(
+            state.level,
+            state.distance,
+            state.player,
+          );
+          const announcements: string[] = [];
           if (cue && cue.key !== lastObstacleCueKey) {
             lastObstacleCueKey = cue.key;
-            setLiveAnnouncement(cue.text);
+            announcements.push(cue.text);
           } else if (!cue) {
             lastObstacleCueKey = '';
           }
+
+          if (
+            lastDoubleJumpStatus !== null &&
+            lastDoubleJumpStatus !== doubleJumpStatus
+          ) {
+            announcements.push(
+              doubleJumpStatus === 'available'
+                ? '二段跳可用。'
+                : doubleJumpStatus === 'used'
+                  ? '二段跳已使用。'
+                  : '已落地，二段跳恢復。',
+            );
+          }
+          lastDoubleJumpStatus = doubleJumpStatus;
+
+          if (announcements.length > 0) {
+            setLiveAnnouncement(announcements.join(' '));
+          }
         }
+      }
+      if (state.status === 'running') {
+        lastDoubleJumpStatus = getDoubleJumpStatus(state.player);
       }
 
       hasDrawn = true;

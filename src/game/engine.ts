@@ -2,14 +2,18 @@ import type { LevelConfig } from './levels';
 import {
   expandObstaclePattern,
   getObstacleCue,
+  SECTION_PREVIEW_LEAD_DISTANCE,
+  type ObstacleQuietZone,
   type ObstaclePatternRole,
   type ScheduledObstacle,
 } from './obstaclePattern';
 import {
   GAP_JUMP_CLEARANCE,
-  JUMP_GRAVITY,
+  DOUBLE_JUMP_IMPULSE,
+  HIGH_STUMP_JUMP_CLEARANCE,
   JUMP_IMPULSE,
   STUMP_JUMP_CLEARANCE,
+  advanceVerticalMotion,
   getRunSpeed,
 } from './physics';
 import {
@@ -23,7 +27,7 @@ export { getRunSpeed } from './physics';
 
 export const WORLD_WIDTH = 960;
 export const WORLD_HEIGHT = 420;
-export const GROUND_Y = 326;
+export const GROUND_Y = 334;
 export const PLAYER_X = 174;
 export const PLAYER_WIDTH = 72;
 export const PLAYER_CENTER_X = PLAYER_X + PLAYER_WIDTH / 2;
@@ -43,7 +47,7 @@ export const CUSTOM_GAME_TUNING = {
 } as const;
 
 export type PlayerAction = 'jump' | 'slideStart' | 'slideEnd';
-export type ObstacleType = 'stump' | 'arch' | 'gap';
+export type ObstacleType = 'stump' | 'highStump' | 'arch' | 'gap';
 export type GameStatus = 'running' | 'won' | 'lost';
 
 export interface Obstacle {
@@ -67,9 +71,12 @@ export interface Pickup {
 export interface PlayerState {
   jumpHeight: number;
   jumpVelocity: number;
+  jumpsUsed: number;
   slideHeld: boolean;
   slideElapsed: number;
 }
+
+export type DoubleJumpStatus = 'available' | 'used' | 'recovered';
 
 export interface GameState {
   level: LevelConfig;
@@ -84,6 +91,7 @@ export interface GameState {
   obstacles: Obstacle[];
   obstacleSchedule: readonly ScheduledObstacle[];
   obstacleSections: ReturnType<typeof expandObstaclePattern>['sections'];
+  obstacleQuietZones: readonly ObstacleQuietZone[];
   nextScheduledObstacleIndex: number;
   pickups: Pickup[];
   nextPickupIn: number;
@@ -99,10 +107,16 @@ export interface GameSnapshot {
   collectibles: number;
   combo: number;
   speed: number;
+  doubleJumpStatus: DoubleJumpStatus;
   cue: ReturnType<typeof getObstacleCue>;
 }
 
-const PICKUP_HEIGHTS = [150, 270, 306, 270] as const;
+const PICKUP_HEIGHTS = [
+  GROUND_Y - 176,
+  GROUND_Y - 56,
+  GROUND_Y - 20,
+  GROUND_Y - 56,
+] as const;
 const PLAYER_HITBOX_LEFT = PLAYER_X + 7;
 const PLAYER_HITBOX_RIGHT = PLAYER_X + PLAYER_WIDTH - 6;
 const OBSTACLE_SPAWN_RIGHT_EDGE = WORLD_WIDTH + 48;
@@ -114,6 +128,17 @@ export function isPlayerSliding(player: PlayerState): boolean {
     player.jumpHeight === 0 &&
     player.jumpVelocity === 0
   );
+}
+
+export function getDoubleJumpStatus(player: PlayerState): DoubleJumpStatus {
+  if (player.jumpHeight > 0 && player.jumpsUsed >= 2) {
+    return 'used';
+  }
+  if (player.jumpHeight > 0 && player.jumpsUsed === 1) {
+    return 'available';
+  }
+
+  return 'recovered';
 }
 
 export function getPickupRenderY(
@@ -160,6 +185,25 @@ function overlapsRunnerPickup(
   );
 }
 
+function pickupInterruptsObstacle(
+  predictedDistance: number,
+  state: GameState,
+): boolean {
+  return (
+    state.obstacleSections.some(
+      (section) =>
+        predictedDistance >=
+          section.firstArchContactDistance - SECTION_PREVIEW_LEAD_DISTANCE &&
+        predictedDistance < section.recoveryEndDistance,
+    ) ||
+    state.obstacleQuietZones.some(
+      (zone) =>
+        predictedDistance >= zone.startDistance &&
+        predictedDistance < zone.endDistance,
+    )
+  );
+}
+
 export function createGameState(level: LevelConfig): GameState {
   const obstaclePattern = expandObstaclePattern(level);
   return {
@@ -174,12 +218,14 @@ export function createGameState(level: LevelConfig): GameState {
     player: {
       jumpHeight: 0,
       jumpVelocity: 0,
+      jumpsUsed: 0,
       slideHeld: false,
       slideElapsed: 0,
     },
     obstacles: [],
     obstacleSchedule: obstaclePattern.obstacles,
     obstacleSections: obstaclePattern.sections,
+    obstacleQuietZones: obstaclePattern.quietZones,
     nextScheduledObstacleIndex: 0,
     pickups: [],
     nextPickupIn: 0.42,
@@ -211,10 +257,28 @@ export function applyPlayerAction(
   }
 
   if (action === 'jump') {
+    if (state.player.slideHeld) {
+      return state;
+    }
+
     if (
-      state.player.jumpHeight > 0 ||
-      state.player.jumpVelocity > 0 ||
-      state.player.slideHeld
+      state.player.jumpHeight > 0 &&
+      state.player.jumpsUsed === 1
+    ) {
+      return {
+        ...state,
+        player: {
+          ...state.player,
+          jumpVelocity: DOUBLE_JUMP_IMPULSE,
+          jumpsUsed: 2,
+        },
+      };
+    }
+
+    if (
+      state.player.jumpHeight !== 0 ||
+      state.player.jumpVelocity !== 0 ||
+      state.player.jumpsUsed !== 0
     ) {
       return state;
     }
@@ -224,6 +288,7 @@ export function applyPlayerAction(
       player: {
         ...state.player,
         jumpVelocity: JUMP_IMPULSE,
+        jumpsUsed: 1,
       },
     };
   }
@@ -264,20 +329,20 @@ export function advanceGame(
   );
   const distanceDelta = distance - state.distance;
   const elapsed = state.elapsed + delta;
-  const jumpHeight = Math.max(
-    0,
-    state.player.jumpHeight + state.player.jumpVelocity * delta,
+  const verticalMotion = advanceVerticalMotion(
+    state.player.jumpHeight,
+    state.player.jumpVelocity,
+    delta,
   );
-  const jumpVelocity =
-    jumpHeight === 0
-      ? 0
-    : state.player.jumpVelocity - JUMP_GRAVITY * delta;
+  const jumpHeight = verticalMotion.height;
+  const jumpVelocity = verticalMotion.velocity;
   const playerIsSliding =
     state.player.slideHeld && jumpHeight === 0 && jumpVelocity === 0;
   const wasSliding = isPlayerSliding(state.player);
   const player = {
     jumpHeight,
     jumpVelocity,
+    jumpsUsed: verticalMotion.landed ? 0 : state.player.jumpsUsed,
     slideHeld: state.player.slideHeld,
     slideElapsed: playerIsSliding
       ? wasSliding
@@ -332,7 +397,9 @@ export function advanceGame(
         : player.jumpHeight >
           (obstacle.type === 'gap'
             ? GAP_JUMP_CLEARANCE
-            : STUMP_JUMP_CLEARANCE);
+            : obstacle.type === 'highStump'
+              ? HIGH_STUMP_JUMP_CLEARANCE
+              : STUMP_JUMP_CLEARANCE);
 
     if (
       overlapsRunner &&
@@ -359,11 +426,9 @@ export function advanceGame(
   if (nextPickupIn <= 0 && distance < state.level.distanceGoal - 250) {
     const predictedPickupDistance =
       distance + PICKUP_SPAWN_X - PLAYER_CENTER_X;
-    const pickupWouldInterruptPattern = state.obstacleSections.some(
-      (section) =>
-        predictedPickupDistance >=
-          section.firstArchContactDistance - 650 &&
-        predictedPickupDistance < section.recoveryEndDistance,
+    const pickupWouldInterruptPattern = pickupInterruptsObstacle(
+      predictedPickupDistance,
+      state,
     );
     if (!pickupWouldInterruptPattern) {
       const heightIndex = Math.floor(
@@ -385,11 +450,9 @@ export function advanceGame(
   for (const pickup of pickups) {
     const predictedPickupDistance =
       distance + pickup.x - PLAYER_CENTER_X;
-    const pickupWouldInterruptPattern = state.obstacleSections.some(
-      (section) =>
-        predictedPickupDistance >=
-          section.firstArchContactDistance - 650 &&
-        predictedPickupDistance < section.recoveryEndDistance,
+    const pickupWouldInterruptPattern = pickupInterruptsObstacle(
+      predictedPickupDistance,
+      state,
     );
     if (pickupWouldInterruptPattern) {
       continue;
@@ -457,6 +520,7 @@ export function toGameSnapshot(state: GameState): GameSnapshot {
     collectibles: state.collectibles,
     combo: state.combo,
     speed: getRunSpeed(state.level, state.distance),
-    cue: getObstacleCue(state.level, state.distance),
+    doubleJumpStatus: getDoubleJumpStatus(state.player),
+    cue: getObstacleCue(state.level, state.distance, state.player),
   };
 }

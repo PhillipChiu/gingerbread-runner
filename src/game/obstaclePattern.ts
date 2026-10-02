@@ -4,10 +4,22 @@ import type {
   PatternObstacleType,
   SlideSectionPattern,
 } from './levels';
-import { getJumpAvoidanceTimeWindow, getRunSpeed } from './physics';
+import {
+  DOUBLE_JUMP_IMPULSE,
+  GAP_JUMP_CLEARANCE,
+  HIGH_STUMP_JUMP_CLEARANCE,
+  JUMP_GRAVITY,
+  JUMP_IMPULSE,
+  STUMP_JUMP_CLEARANCE,
+  getJumpAvoidanceTimeWindow,
+  getRunSpeed,
+  getVerticalClearanceTimeWindow,
+  getVerticalHeightAtTime,
+} from './physics';
 
 export const OBSTACLE_WIDTHS: Readonly<Record<PatternObstacleType, number>> = {
   arch: 82,
+  highStump: 42,
   stump: 58,
   gap: 88,
 };
@@ -19,6 +31,11 @@ export const JUMP_PREPARE_LEAD_DISTANCE = 300;
 export const SECTION_PREVIEW_LEAD_DISTANCE = 650;
 export const MIN_RECOVERY_CUE_DISTANCE = 300;
 export const SAFE_FINISH_DISTANCE = 650;
+const DOUBLE_JUMP_CUE_MARGIN = 6;
+const HIGH_STUMP_CUE_MARGIN = 2;
+const FIRST_JUMP_CUE_EARLY_TOLERANCE_SECONDS = 0.05;
+const FIRST_JUMP_CUE_LATE_TOLERANCE_SECONDS = 0.08;
+const SEQUENCE_PREVIEW_LEAD_DISTANCE = 300;
 
 export type ObstaclePatternRole = 'prelude' | 'arch' | 'followup';
 
@@ -30,6 +47,12 @@ export interface ScheduledObstacle {
   patternRole: ObstaclePatternRole;
   patternIndex: number;
   patternCount: number;
+  sequenceId?: string;
+}
+
+export interface ObstacleQuietZone {
+  startDistance: number;
+  endDistance: number;
 }
 
 export interface ExpandedSlideSection extends SlideSectionPattern {
@@ -47,6 +70,7 @@ export interface ExpandedSlideSection extends SlideSectionPattern {
 export interface ExpandedObstaclePattern {
   obstacles: ScheduledObstacle[];
   sections: ExpandedSlideSection[];
+  quietZones: ObstacleQuietZone[];
 }
 
 export type ObstacleCueKind =
@@ -56,6 +80,7 @@ export type ObstacleCueKind =
   | 'hold'
   | 'release'
   | 'jump'
+  | 'doubleJump'
   | 'recovery';
 
 export interface ObstacleCue {
@@ -70,6 +95,18 @@ interface RelativeSlideSection {
   archLastClearOffset: number;
   followupOffsets: number[];
   finalFollowupClearOffset: number;
+}
+
+interface ActionableWindow {
+  startDistance: number;
+  endDistance: number;
+}
+
+interface CuePlayerState {
+  jumpHeight: number;
+  jumpVelocity: number;
+  jumpsUsed: number;
+  slideHeld: boolean;
 }
 
 const expandedPatternCache = new WeakMap<LevelConfig, ExpandedObstaclePattern>();
@@ -213,6 +250,7 @@ function obstacle(
   patternRole: ObstaclePatternRole,
   patternIndex: number,
   patternCount: number,
+  sequenceId?: string,
 ): ScheduledObstacle {
   return {
     type,
@@ -222,6 +260,7 @@ function obstacle(
     patternRole,
     patternIndex,
     patternCount,
+    ...(sequenceId ? { sequenceId } : {}),
   };
 }
 
@@ -272,17 +311,67 @@ export function expandObstaclePattern(
     },
   );
 
-  const obstacles: ScheduledObstacle[] = level.obstaclePattern.prelude.map(
-    (pattern, index, prelude) =>
-      obstacle(
-        pattern.type,
-        progressToDistance(pattern.atProgress, level.distanceGoal),
-        `level-${level.id}-prelude-${index + 1}`,
-        'prelude',
-        index + 1,
-        prelude.length,
-      ),
-  );
+  const prelude = level.obstaclePattern.prelude;
+  const sequenceCounts = new Map<string, number>();
+  for (const pattern of prelude) {
+    if (pattern.sequenceId) {
+      sequenceCounts.set(
+        pattern.sequenceId,
+        (sequenceCounts.get(pattern.sequenceId) ?? 0) + 1,
+      );
+    }
+  }
+
+  const sequenceIndexes = new Map<string, number>();
+  const previousSequenceObstacle = new Map<string, ScheduledObstacle>();
+  const obstacles: ScheduledObstacle[] = prelude.map((pattern, index) => {
+    const sequenceId = pattern.sequenceId;
+    const previous = sequenceId
+      ? previousSequenceObstacle.get(sequenceId)
+      : undefined;
+    const clearanceGap = pattern.afterPreviousClearancePx;
+    if (
+      clearanceGap !== undefined &&
+      (!previous ||
+        !Number.isFinite(clearanceGap) ||
+        clearanceGap < 0)
+    ) {
+      throw new RangeError(
+        'A prelude clearance gap requires a previous obstacle in the same sequence.',
+      );
+    }
+
+    const contactDistance =
+      clearanceGap !== undefined
+        ? previous!.contactDistance +
+          previous!.width +
+          OBSTACLE_COLLISION_CLEARANCE +
+          clearanceGap
+        : progressToDistance(pattern.atProgress, level.distanceGoal);
+    const patternId = sequenceId
+      ? `level-${level.id}-prelude-${sequenceId}`
+      : `level-${level.id}-prelude-${index + 1}`;
+    const patternIndex = sequenceId
+      ? (sequenceIndexes.get(sequenceId) ?? 0) + 1
+      : 1;
+    if (sequenceId) {
+      sequenceIndexes.set(sequenceId, patternIndex);
+    }
+    const scheduled = obstacle(
+      pattern.type,
+      contactDistance,
+      patternId,
+      'prelude',
+      patternIndex,
+      sequenceId ? sequenceCounts.get(sequenceId)! : 1,
+      sequenceId,
+    );
+    if (sequenceId) {
+      previousSequenceObstacle.set(sequenceId, scheduled);
+    }
+
+    return scheduled;
+  });
 
   for (const section of sections) {
     for (let index = 0; index < section.archCount; index += 1) {
@@ -313,22 +402,51 @@ export function expandObstaclePattern(
   }
 
   obstacles.sort((left, right) => left.contactDistance - right.contactDistance);
-  const expanded = { obstacles, sections };
+  const preludeCueGroups = new Map<string, ScheduledObstacle[]>();
+  for (const scheduled of obstacles) {
+    if (
+      scheduled.patternRole === 'prelude' &&
+      (scheduled.sequenceId || scheduled.type === 'highStump')
+    ) {
+      const group = preludeCueGroups.get(scheduled.patternId) ?? [];
+      group.push(scheduled);
+      preludeCueGroups.set(scheduled.patternId, group);
+    }
+  }
+  const quietZones: ObstacleQuietZone[] = [...preludeCueGroups.values()].map(
+    (group) => {
+      const first = group[0]!;
+      const last = group.at(-1)!;
+      return {
+        startDistance:
+          first.contactDistance - SECTION_PREVIEW_LEAD_DISTANCE,
+        endDistance:
+          last.contactDistance +
+          last.width +
+          OBSTACLE_COLLISION_CLEARANCE +
+          MIN_RECOVERY_CUE_DISTANCE,
+      };
+    },
+  );
+  const expanded = { obstacles, sections, quietZones };
   expandedPatternCache.set(level, expanded);
   return expanded;
 }
 
 function getJumpName(type: FollowupJumpType): string {
-  return type === 'gap' ? '裂隙' : '樹樁';
+  if (type === 'gap') {
+    return '裂隙';
+  }
+  return type === 'highStump' ? '高樹樁' : '樹樁';
 }
 
 function getJumpCueWindow(
   level: LevelConfig,
-  obstacleType: FollowupJumpType,
+  obstacleType: 'stump' | 'gap',
   contactDistance: number,
   obstacleWidth: number,
   currentDistance: number,
-): { startDistance: number; endDistance: number } | null {
+): ActionableWindow | null {
   const speed = getRunSpeed(level, currentDistance);
   const { ascentSeconds, descentSeconds } =
     getJumpAvoidanceTimeWindow(obstacleType);
@@ -344,7 +462,446 @@ function getJumpCueWindow(
     : null;
 }
 
-function getPrepareCue(key: string, obstacleType: FollowupJumpType): ObstacleCue {
+function getHighStumpFirstJumpWindow(
+  level: LevelConfig,
+  obstacle: ScheduledObstacle,
+): ActionableWindow | null {
+  const speed = getRunSpeed(level, obstacle.contactDistance);
+  const firstJumpPeakTime = JUMP_IMPULSE / JUMP_GRAVITY;
+  const firstJumpPeakHeight = JUMP_IMPULSE ** 2 / (2 * JUMP_GRAVITY);
+  const secondJumpWindow = getVerticalClearanceTimeWindow(
+    firstJumpPeakHeight,
+    DOUBLE_JUMP_IMPULSE,
+    HIGH_STUMP_JUMP_CLEARANCE + HIGH_STUMP_CUE_MARGIN,
+  );
+  if (!secondJumpWindow) {
+    return null;
+  }
+
+  const obstacleTraversalSeconds =
+    (obstacle.width + OBSTACLE_COLLISION_CLEARANCE) / speed;
+  const usableSecondJumpSeconds =
+    secondJumpWindow.descentSeconds - secondJumpWindow.ascentSeconds;
+  if (usableSecondJumpSeconds <= obstacleTraversalSeconds) {
+    return null;
+  }
+
+  const secondJumpToContactSeconds =
+    (secondJumpWindow.ascentSeconds +
+      secondJumpWindow.descentSeconds -
+      obstacleTraversalSeconds) /
+    2;
+  const secondJumpDistance =
+    obstacle.contactDistance - speed * secondJumpToContactSeconds;
+  const targetFirstJumpDistance =
+    secondJumpDistance - speed * firstJumpPeakTime;
+  return {
+    startDistance:
+      targetFirstJumpDistance -
+      speed * FIRST_JUMP_CUE_EARLY_TOLERANCE_SECONDS,
+    endDistance:
+      targetFirstJumpDistance +
+      speed * FIRST_JUMP_CUE_LATE_TOLERANCE_SECONDS,
+  };
+}
+
+function isDoubleJumpPair(
+  level: LevelConfig,
+  first: ScheduledObstacle,
+  second: ScheduledObstacle,
+): boolean {
+  if (first.type !== 'stump' || second.type !== 'stump') {
+    return false;
+  }
+
+  const speed = getRunSpeed(level, first.contactDistance);
+  const singleJumpWindow = getJumpAvoidanceTimeWindow('stump');
+  const fullPairDistance =
+    second.contactDistance +
+    second.width +
+    OBSTACLE_COLLISION_CLEARANCE -
+    first.contactDistance;
+
+  return (
+    fullPairDistance >
+    speed *
+      (singleJumpWindow.descentSeconds - singleJumpWindow.ascentSeconds)
+  );
+}
+
+function getDoubleJumpPairFirstWindow(
+  level: LevelConfig,
+  first: ScheduledObstacle,
+  second: ScheduledObstacle,
+): ActionableWindow | null {
+  if (!isDoubleJumpPair(level, first, second)) {
+    return null;
+  }
+
+  const speed = getRunSpeed(level, first.contactDistance);
+  const safeClearance = STUMP_JUMP_CLEARANCE + DOUBLE_JUMP_CUE_MARGIN;
+  const firstClearDistance =
+    first.contactDistance +
+    first.width +
+    OBSTACLE_COLLISION_CLEARANCE;
+  const secondContactDistance =
+    second.contactDistance;
+  const secondClearDistance =
+    secondContactDistance +
+    second.width +
+    OBSTACLE_COLLISION_CLEARANCE;
+  const secondJumpStartDistance = firstClearDistance;
+  const secondJumpDuration =
+    (secondClearDistance - secondJumpStartDistance) / speed;
+  const firstJumpFlightSeconds = (2 * JUMP_IMPULSE) / JUMP_GRAVITY;
+  const earliestTakeoffDistance =
+    firstClearDistance - speed * firstJumpFlightSeconds;
+  const validTakeoffDistances: number[] = [];
+
+  for (
+    let takeoffDistance = Math.ceil(earliestTakeoffDistance);
+    takeoffDistance < first.contactDistance;
+    takeoffDistance += 1
+  ) {
+    const timeAtFirstContact =
+      (first.contactDistance - takeoffDistance) / speed;
+    const timeAtFirstClear =
+      (firstClearDistance - takeoffDistance) / speed;
+    const heightAtFirstContact = getVerticalHeightAtTime(
+      0,
+      JUMP_IMPULSE,
+      timeAtFirstContact,
+    );
+    const heightAtFirstClear = getVerticalHeightAtTime(
+      0,
+      JUMP_IMPULSE,
+      timeAtFirstClear,
+    );
+    if (
+      heightAtFirstContact <= safeClearance ||
+      heightAtFirstClear <= safeClearance
+    ) {
+      continue;
+    }
+
+    const secondJumpStartTime =
+      (secondContactDistance - secondJumpStartDistance) / speed;
+    const heightAtSecondContact = getVerticalHeightAtTime(
+      heightAtFirstClear,
+      DOUBLE_JUMP_IMPULSE,
+      secondJumpStartTime,
+    );
+    const heightAtSecondClear = getVerticalHeightAtTime(
+      heightAtFirstClear,
+      DOUBLE_JUMP_IMPULSE,
+      secondJumpDuration,
+    );
+    if (
+      heightAtSecondContact > safeClearance &&
+      heightAtSecondClear > safeClearance
+    ) {
+      validTakeoffDistances.push(takeoffDistance);
+    }
+  }
+
+  if (validTakeoffDistances.length < 2) {
+    return null;
+  }
+
+  return {
+    startDistance: validTakeoffDistances[0]! + 1,
+    endDistance: validTakeoffDistances.at(-1)!,
+  };
+}
+
+function canDoubleJumpClearPair(
+  level: LevelConfig,
+  currentDistance: number,
+  first: ScheduledObstacle,
+  second: ScheduledObstacle,
+  player: CuePlayerState,
+): boolean {
+  if (
+    player.jumpHeight <= 0 ||
+    player.jumpsUsed !== 1 ||
+    player.slideHeld
+  ) {
+    return false;
+  }
+
+  const speed = getRunSpeed(level, currentDistance);
+  const safeClearance = STUMP_JUMP_CLEARANCE + DOUBLE_JUMP_CUE_MARGIN;
+  const obstacles = [first, second];
+
+  for (const obstacle of obstacles) {
+    const clearDistance =
+      obstacle.contactDistance +
+      obstacle.width +
+      OBSTACLE_COLLISION_CLEARANCE;
+    if (currentDistance >= clearDistance) {
+      continue;
+    }
+
+    const firstOverlappingDistance = Math.max(
+      currentDistance,
+      obstacle.contactDistance,
+    );
+    const startTime = (firstOverlappingDistance - currentDistance) / speed;
+    const endTime = (clearDistance - currentDistance) / speed;
+    const heightAtStart = getVerticalHeightAtTime(
+      player.jumpHeight,
+      DOUBLE_JUMP_IMPULSE,
+      startTime,
+    );
+    const heightAtEnd = getVerticalHeightAtTime(
+      player.jumpHeight,
+      DOUBLE_JUMP_IMPULSE,
+      endTime,
+    );
+    if (
+      heightAtStart <= safeClearance ||
+      heightAtEnd <= safeClearance
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function getDoubleJumpPairCue(
+  level: LevelConfig,
+  currentDistance: number,
+  first: ScheduledObstacle,
+  second: ScheduledObstacle,
+  cueKey: string,
+  player?: CuePlayerState,
+): ObstacleCue | null {
+  const firstJumpWindow = getDoubleJumpPairFirstWindow(
+    level,
+    first,
+    second,
+  );
+  if (!firstJumpWindow) {
+    return null;
+  }
+
+  const secondClearDistance =
+    second.contactDistance +
+    second.width +
+    OBSTACLE_COLLISION_CLEARANCE;
+  const firstJumpPrepareStart =
+    firstJumpWindow.startDistance - SEQUENCE_PREVIEW_LEAD_DISTANCE;
+
+  if (player?.jumpHeight && player.jumpsUsed === 1) {
+    if (
+      player.slideHeld &&
+      currentDistance >= first.contactDistance - 60 &&
+      currentDistance < secondClearDistance
+    ) {
+      return {
+        key: `${cueKey}:second-release`,
+        kind: 'release',
+        text: '跳躍與滑行互斥，先放開滑行，再空中二段跳。',
+      };
+    }
+
+    if (
+      !player.slideHeld &&
+      currentDistance >= first.contactDistance &&
+      currentDistance < secondClearDistance &&
+      canDoubleJumpClearPair(
+        level,
+        currentDistance,
+        first,
+        second,
+        player,
+      )
+    ) {
+      return {
+        key: `${cueKey}:second`,
+        kind: 'doubleJump',
+        text: `空中再按一次二段跳，越過第二座樹樁。`,
+      };
+    }
+
+    if (
+      currentDistance >= first.contactDistance - 60 &&
+      currentDistance < secondClearDistance
+    ) {
+      return {
+        key: `${cueKey}:second-prepare`,
+        kind: 'prepare',
+        text: '第一跳已離地，保持在空中，準備再按一次跳躍。',
+      };
+    }
+
+    return null;
+  }
+
+  if (player?.slideHeld) {
+    if (
+      currentDistance >= firstJumpPrepareStart &&
+      currentDistance < first.contactDistance
+    ) {
+      return {
+        key: `${cueKey}:release`,
+        kind: 'release',
+        text: '連跳樹樁需要跳躍，現在放開滑行。',
+      };
+    }
+    return null;
+  }
+
+  if (player?.jumpsUsed) {
+    return null;
+  }
+
+  if (
+    currentDistance >= firstJumpPrepareStart &&
+    currentDistance < firstJumpWindow.startDistance
+  ) {
+    return {
+      key: `${cueKey}:prepare`,
+      kind: 'prepare',
+      text: '前方兩座緊接樹樁；先跳第一座，離地後再二段跳。',
+    };
+  }
+
+  if (
+    currentDistance >= firstJumpWindow.startDistance &&
+    currentDistance < firstJumpWindow.endDistance
+  ) {
+    return {
+      key: `${cueKey}:first`,
+      kind: 'jump',
+      text: '現在先跳過第一座樹樁，空中再按一次跳躍越過第二座。',
+    };
+  }
+
+  return null;
+}
+
+function getHighStumpCue(
+  level: LevelConfig,
+  currentDistance: number,
+  obstacle: ScheduledObstacle,
+  player?: CuePlayerState,
+): ObstacleCue | null {
+  const firstJumpWindow = getHighStumpFirstJumpWindow(level, obstacle);
+  if (!firstJumpWindow) {
+    return null;
+  }
+
+  const prepareStart =
+    firstJumpWindow.startDistance - JUMP_PREPARE_LEAD_DISTANCE;
+  const obstacleClearDistance =
+    obstacle.contactDistance +
+    obstacle.width +
+    OBSTACLE_COLLISION_CLEARANCE;
+
+  if (player?.jumpHeight && player.jumpsUsed === 1) {
+    if (
+      player.slideHeld &&
+      currentDistance >= prepareStart &&
+      currentDistance < obstacle.contactDistance
+    ) {
+      return {
+        key: `${obstacle.patternId}:release`,
+        kind: 'release',
+        text: '跳躍與滑行互斥，先放開滑行，再空中二段跳。',
+      };
+    }
+
+    const speed = getRunSpeed(level, currentDistance);
+    const secondJumpWindow = getVerticalClearanceTimeWindow(
+      player.jumpHeight,
+      DOUBLE_JUMP_IMPULSE,
+      HIGH_STUMP_JUMP_CLEARANCE + HIGH_STUMP_CUE_MARGIN,
+    );
+    if (secondJumpWindow) {
+      const safeWindow = {
+        startDistance:
+          obstacleClearDistance -
+          speed * secondJumpWindow.descentSeconds,
+        endDistance:
+          obstacle.contactDistance -
+          speed * secondJumpWindow.ascentSeconds,
+      };
+      if (
+        !player.slideHeld &&
+        safeWindow.startDistance < safeWindow.endDistance &&
+        currentDistance >= safeWindow.startDistance &&
+        currentDistance < safeWindow.endDistance
+      ) {
+        return {
+          key: `${obstacle.patternId}:double-jump`,
+          kind: 'doubleJump',
+          text: '高樹樁就在前方，現在空中二段跳！',
+        };
+      }
+
+      if (
+        currentDistance >= firstJumpWindow.startDistance &&
+        currentDistance < obstacle.contactDistance &&
+        currentDistance < safeWindow.startDistance
+      ) {
+        return {
+          key: `${obstacle.patternId}:double-prepare`,
+          kind: 'prepare',
+          text: '第一跳已離地；保持空中，等高樹樁前的二段跳提示。',
+        };
+      }
+    }
+
+    return null;
+  }
+
+  if (player?.jumpsUsed || player?.slideHeld) {
+    if (
+      player.slideHeld &&
+      currentDistance >= prepareStart &&
+      currentDistance < obstacle.contactDistance
+    ) {
+      return {
+        key: `${obstacle.patternId}:release`,
+        kind: 'release',
+        text: '高樹樁需要跳躍，現在放開滑行。',
+      };
+    }
+
+    return null;
+  }
+
+  if (
+    currentDistance >= prepareStart &&
+    currentDistance < firstJumpWindow.startDistance
+  ) {
+    return {
+      key: `${obstacle.patternId}:prepare`,
+      kind: 'prepare',
+      text: '前方高樹樁很高，先準備第一跳；離地後還要再跳一次。',
+    };
+  }
+
+  if (
+    currentDistance >= firstJumpWindow.startDistance &&
+    currentDistance < firstJumpWindow.endDistance
+  ) {
+    return {
+      key: `${obstacle.patternId}:first-jump`,
+      kind: 'jump',
+      text: '現在第一跳！跳離地後，再按一次二段跳越過高樹樁。',
+    };
+  }
+
+  return null;
+}
+
+function getPrepareCue(
+  key: string,
+  obstacleType: FollowupJumpType,
+): ObstacleCue {
   return {
     key,
     kind: 'prepare',
@@ -354,7 +911,7 @@ function getPrepareCue(key: string, obstacleType: FollowupJumpType): ObstacleCue
 
 function getJumpCue(
   key: string,
-  obstacleType: FollowupJumpType,
+  obstacleType: 'stump' | 'gap',
   releaseSlide: boolean,
 ): ObstacleCue {
   return {
@@ -366,9 +923,125 @@ function getJumpCue(
   };
 }
 
+function isGroundedAndReadyToJump(player?: CuePlayerState): boolean {
+  return (
+    !player ||
+    (!player.slideHeld &&
+      player.jumpHeight === 0 &&
+      player.jumpVelocity === 0 &&
+      player.jumpsUsed === 0)
+  );
+}
+
+function getStateAwareJumpCue(
+  level: LevelConfig,
+  currentDistance: number,
+  obstacle: ScheduledObstacle,
+  cueKey: string,
+  cueWindow: ActionableWindow,
+  player?: CuePlayerState,
+): ObstacleCue | null {
+  if (!player) {
+    return null;
+  }
+
+  if (player.slideHeld) {
+    const prepareStart =
+      cueWindow.startDistance - JUMP_PREPARE_LEAD_DISTANCE;
+    if (
+      currentDistance >= prepareStart &&
+      currentDistance < obstacle.contactDistance
+    ) {
+      return {
+        key: `${cueKey}:release`,
+        kind: 'release',
+        text: player.jumpHeight > 0
+          ? '跳躍與滑行互斥，先放開滑行，再空中二段跳。'
+          : '跳躍與滑行互斥，先放開滑行再起跳。',
+      };
+    }
+    return null;
+  }
+
+  if (player.jumpHeight <= 0 || player.jumpsUsed !== 1) {
+    return null;
+  }
+
+  if (obstacle.type !== 'stump' && obstacle.type !== 'gap') {
+    return null;
+  }
+
+  const minimumHeight =
+    obstacle.type === 'gap' ? GAP_JUMP_CLEARANCE : STUMP_JUMP_CLEARANCE;
+  const secondJumpWindow = getVerticalClearanceTimeWindow(
+    player.jumpHeight,
+    DOUBLE_JUMP_IMPULSE,
+    minimumHeight + DOUBLE_JUMP_CUE_MARGIN,
+  );
+  if (!secondJumpWindow) {
+    return null;
+  }
+
+  const speed = getRunSpeed(level, currentDistance);
+  const clearDistance =
+    obstacle.contactDistance +
+    obstacle.width +
+    OBSTACLE_COLLISION_CLEARANCE;
+  const actionableWindow = {
+    startDistance:
+      clearDistance - speed * secondJumpWindow.descentSeconds,
+    endDistance:
+      obstacle.contactDistance - speed * secondJumpWindow.ascentSeconds,
+  };
+
+  if (
+    actionableWindow.startDistance < actionableWindow.endDistance &&
+    currentDistance < obstacle.contactDistance &&
+    currentDistance >= actionableWindow.startDistance &&
+    currentDistance < actionableWindow.endDistance
+  ) {
+    return {
+      key: `${cueKey}:second`,
+      kind: 'doubleJump',
+      text: `空中再按一次二段跳，越過${getJumpName(obstacle.type)}。`,
+    };
+  }
+
+  const prepareStart =
+    actionableWindow.startDistance - JUMP_PREPARE_LEAD_DISTANCE;
+  if (
+    actionableWindow.startDistance < actionableWindow.endDistance &&
+    currentDistance >= prepareStart &&
+    currentDistance < actionableWindow.startDistance &&
+    currentDistance < obstacle.contactDistance
+  ) {
+    return {
+      key: `${cueKey}:second-prepare`,
+      kind: 'prepare',
+      text: `保持在空中，準備再按一次跳躍越過${getJumpName(obstacle.type)}。`,
+    };
+  }
+
+  return null;
+}
+
+function getScheduledFollowup(
+  obstacles: readonly ScheduledObstacle[],
+  section: ExpandedSlideSection,
+  index: number,
+): ScheduledObstacle {
+  return obstacles.find(
+    (scheduled) =>
+      scheduled.patternId === section.id &&
+      scheduled.patternRole === 'followup' &&
+      scheduled.patternIndex === index + 1,
+  )!;
+}
+
 export function getObstacleCue(
   level: LevelConfig,
   distance: number,
+  player?: CuePlayerState,
 ): ObstacleCue | null {
   const { obstacles, sections } = expandObstaclePattern(level);
   const currentDistance = Math.max(0, distance);
@@ -382,7 +1055,10 @@ export function getObstacleCue(
       const recoveryStart = previousSection.finalFollowupClearDistance;
       const recoveryDistance = previewStart - recoveryStart;
       if (recoveryDistance >= MIN_RECOVERY_CUE_DISTANCE) {
-        if (currentDistance >= recoveryStart && currentDistance < previewStart) {
+        if (
+          currentDistance >= recoveryStart &&
+          currentDistance < previewStart
+        ) {
           return {
             key: `${previousSection.id}:recovery`,
             kind: 'recovery',
@@ -423,11 +1099,77 @@ export function getObstacleCue(
       const jumpType = section.followupJumps[jumpIndex]!;
       const contactDistance =
         section.followupJumpContactDistances[jumpIndex]!;
+      const obstacle = getScheduledFollowup(obstacles, section, jumpIndex);
+      const nextType = section.followupJumps[jumpIndex + 1];
+      const nextObstacle =
+        nextType === 'stump'
+          ? getScheduledFollowup(obstacles, section, jumpIndex + 1)
+          : undefined;
+
+      if (
+        nextObstacle &&
+        nextType === 'stump' &&
+        isDoubleJumpPair(level, obstacle, nextObstacle)
+      ) {
+        const pairKey = `${section.id}:double-jump-${jumpIndex + 1}`;
+        const pairWindow = getDoubleJumpPairFirstWindow(
+          level,
+          obstacle,
+          nextObstacle,
+        );
+        if (
+          pairWindow &&
+          currentDistance >= section.lastArchClearDistance &&
+          currentDistance <
+            pairWindow.startDistance - SEQUENCE_PREVIEW_LEAD_DISTANCE
+        ) {
+          return {
+            key: `${section.id}:release`,
+            kind: 'release',
+            text: '最後一座低門已清空，現在放開滑行，準備連跳樹樁。',
+          };
+        }
+        if (player?.slideHeld && currentDistance >= section.lastArchClearDistance) {
+          return {
+            key: `${section.id}:release`,
+            kind: 'release',
+            text: '連續樹樁需要跳躍，現在放開滑行。',
+          };
+        }
+
+        const pairCue = getDoubleJumpPairCue(
+          level,
+          currentDistance,
+          obstacle,
+          nextObstacle,
+          pairKey,
+          player,
+        );
+        if (pairCue) {
+          return pairCue;
+        }
+        jumpIndex += 1;
+        continue;
+      }
+
+      if (jumpType === 'highStump') {
+        const highCue = getHighStumpCue(
+          level,
+          currentDistance,
+          obstacle,
+          player,
+        );
+        if (highCue) {
+          return highCue;
+        }
+        continue;
+      }
+
       const cueWindow = getJumpCueWindow(
         level,
         jumpType,
         contactDistance,
-        OBSTACLE_WIDTHS[jumpType],
+        obstacle.width,
         currentDistance,
       );
       if (!cueWindow) {
@@ -440,13 +1182,36 @@ export function getObstacleCue(
           currentDistance >= section.lastArchClearDistance &&
           currentDistance < cueWindow.startDistance
         ) {
-          return {
-            key: `${section.id}:release`,
-            kind: 'release',
-            text: `最後一座低門已清空，現在放開滑行，準備跳過${getJumpName(jumpType)}。`,
-          };
+          if (!player || player.slideHeld) {
+            return {
+              key: `${section.id}:release`,
+              kind: 'release',
+              text: `最後一座低門已清空，現在放開滑行，準備跳過${getJumpName(jumpType)}。`,
+            };
+          }
+
+          if (isGroundedAndReadyToJump(player)) {
+            return getPrepareCue(jumpCueKey, jumpType);
+          }
         }
-      } else {
+      }
+
+      const stateAwareCue = getStateAwareJumpCue(
+        level,
+        currentDistance,
+        obstacle,
+        jumpCueKey,
+        cueWindow,
+        player,
+      );
+      if (stateAwareCue) {
+        return stateAwareCue;
+      }
+      if (!isGroundedAndReadyToJump(player)) {
+        continue;
+      }
+
+      if (jumpIndex > 0) {
         const previousJumpType = section.followupJumps[jumpIndex - 1]!;
         const previousJumpClearDistance =
           section.followupJumpContactDistances[jumpIndex - 1]! +
@@ -480,7 +1245,11 @@ export function getObstacleCue(
         currentDistance >= cueWindow.startDistance &&
         currentDistance < cueWindow.endDistance
       ) {
-        return getJumpCue(jumpCueKey, jumpType, jumpIndex === 0);
+        return getJumpCue(
+          jumpCueKey,
+          jumpType,
+          player?.slideHeld ?? false,
+        );
       }
     }
 
@@ -497,50 +1266,110 @@ export function getObstacleCue(
     }
   }
 
-  for (const prelude of obstacles) {
-    const cueStart = prelude.contactDistance - JUMP_PREPARE_LEAD_DISTANCE;
-    const cueEnd =
-      prelude.contactDistance +
-      prelude.width +
-      OBSTACLE_COLLISION_CLEARANCE;
+  const preludeObstacles = obstacles.filter(
+    (obstacle) => obstacle.patternRole === 'prelude',
+  );
+  const preludeGroups = new Map<string, ScheduledObstacle[]>();
+  for (const prelude of preludeObstacles) {
+    const group = preludeGroups.get(prelude.patternId) ?? [];
+    group.push(prelude);
+    preludeGroups.set(prelude.patternId, group);
+  }
 
-    if (prelude.type === 'arch') {
-      if (currentDistance >= cueStart && currentDistance < cueEnd) {
-        return {
-          key: `${prelude.patternId}:hold`,
-          kind: 'hold',
-          text: '前方低門，按住滑行通過。',
-        };
+  for (const group of preludeGroups.values()) {
+    const first = group[0]!;
+    const second = group[1];
+    if (
+      second &&
+      isDoubleJumpPair(level, first, second)
+    ) {
+      const pairCue = getDoubleJumpPairCue(
+        level,
+        currentDistance,
+        first,
+        second,
+        first.patternId,
+        player,
+      );
+      if (pairCue) {
+        return pairCue;
+      }
+      continue;
+    }
+
+    for (const prelude of group) {
+      if (prelude.type === 'highStump') {
+        const highCue = getHighStumpCue(
+          level,
+          currentDistance,
+          prelude,
+          player,
+        );
+        if (highCue) {
+          return highCue;
+        }
+        continue;
       }
 
-      continue;
-    }
+      const cueStart =
+        prelude.contactDistance - JUMP_PREPARE_LEAD_DISTANCE;
+      const cueEnd =
+        prelude.contactDistance +
+        prelude.width +
+        OBSTACLE_COLLISION_CLEARANCE;
 
-    const cueWindow = getJumpCueWindow(
-      level,
-      prelude.type,
-      prelude.contactDistance,
-      prelude.width,
-      currentDistance,
-    );
-    if (!cueWindow) {
-      continue;
-    }
+      if (prelude.type === 'arch') {
+        if (currentDistance >= cueStart && currentDistance < cueEnd) {
+          return {
+            key: `${prelude.patternId}:hold`,
+            kind: 'hold',
+            text: '前方低門，按住滑行通過。',
+          };
+        }
 
-    if (
-      currentDistance >= cueStart &&
-      currentDistance < cueWindow.startDistance
-    ) {
-      return getPrepareCue(`${prelude.patternId}:prepare`, prelude.type);
-    }
+        continue;
+      }
 
-    if (
-      currentDistance >= cueWindow.startDistance &&
-      currentDistance < cueWindow.endDistance
-    ) {
-      return {
-        ...getJumpCue(`${prelude.patternId}:jump`, prelude.type, false),
-      };
+      const cueWindow = getJumpCueWindow(
+        level,
+        prelude.type,
+        prelude.contactDistance,
+        prelude.width,
+        currentDistance,
+      );
+      if (!cueWindow) {
+        continue;
+      }
+
+      const jumpCueKey = `${prelude.patternId}:jump`;
+      const stateAwareCue = getStateAwareJumpCue(
+        level,
+        currentDistance,
+        prelude,
+        jumpCueKey,
+        cueWindow,
+        player,
+      );
+      if (stateAwareCue) {
+        return stateAwareCue;
+      }
+      if (!isGroundedAndReadyToJump(player)) {
+        continue;
+      }
+
+      if (
+        currentDistance >= cueStart &&
+        currentDistance < cueWindow.startDistance
+      ) {
+        return getPrepareCue(`${prelude.patternId}:prepare`, prelude.type);
+      }
+
+      if (
+        currentDistance >= cueWindow.startDistance &&
+        currentDistance < cueWindow.endDistance
+      ) {
+        return getJumpCue(jumpCueKey, prelude.type, false);
+      }
     }
   }
 

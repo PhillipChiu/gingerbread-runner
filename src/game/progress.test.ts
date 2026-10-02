@@ -57,6 +57,53 @@ describe('local progress', () => {
     expect(secondStageClear.clearedLevels).toEqual([1, 2]);
   });
 
+  it('migrates a legacy L10 clear to L11 without losing any saved progress', () => {
+    const storage = createMemoryStorage();
+    const clearedLevels = Array.from({ length: 10 }, (_, index) => index + 1);
+    storage.setItem(
+      PROGRESS_STORAGE_KEY,
+      JSON.stringify({
+        unlockedLevel: 10,
+        clearedLevels,
+        bestScores: { 1: 840, 10: 2_450 },
+        totalCollectibles: 37,
+      }),
+    );
+
+    expect(readProgress(storage)).toEqual({
+      unlockedLevel: 11,
+      clearedLevels,
+      bestScores: { 1: 840, 10: 2_450 },
+      totalCollectibles: 37,
+    });
+
+    const levelTenUnlockedButNotCleared = createMemoryStorage();
+    levelTenUnlockedButNotCleared.setItem(
+      PROGRESS_STORAGE_KEY,
+      JSON.stringify({
+        unlockedLevel: 10,
+        clearedLevels: Array.from({ length: 9 }, (_, index) => index + 1),
+        bestScores: { 10: 500 },
+        totalCollectibles: 9,
+      }),
+    );
+    expect(readProgress(levelTenUnlockedButNotCleared).unlockedLevel).toBe(10);
+  });
+
+  it('unlocks and records scores through L20 without exceeding the final stage', () => {
+    const finalClear = recordRun(DEFAULT_PROGRESS, 20, 9_900, 5, true);
+    const invalidHigherClear = recordRun(finalClear, 21, 10_000, 1, true);
+
+    expect(finalClear).toMatchObject({
+      unlockedLevel: 20,
+      clearedLevels: [20],
+      bestScores: { 20: 9_900 },
+      totalCollectibles: 5,
+    });
+    expect(invalidHigherClear.unlockedLevel).toBe(20);
+    expect(invalidHigherClear.bestScores[20]).toBe(10_000);
+  });
+
   it('round-trips a valid record and safely ignores malformed storage', () => {
     const storage = createMemoryStorage();
     const progress = recordRun(DEFAULT_PROGRESS, 3, 1_250, 7, true);
@@ -82,9 +129,9 @@ describe('local progress', () => {
     );
 
     expect(readProgress(storage)).toEqual({
-      unlockedLevel: 10,
-      clearedLevels: [1, 2],
-      bestScores: { 1: 150 },
+      unlockedLevel: 20,
+      clearedLevels: [1, 2, 11],
+      bestScores: { 1: 150, 12: 9_999 },
       totalCollectibles: 0,
     });
   });

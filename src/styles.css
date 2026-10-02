@@ -1371,6 +1371,57 @@ kbd {
   background: rgba(238, 242, 202, 0.65);
 }
 
+.double-jump-status-card {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 9px;
+  padding: 7px 12px;
+  border: 1px solid rgba(215, 228, 143, 0.22);
+  border-radius: 7px;
+  color: #e8ecd9;
+  background: rgba(215, 228, 143, 0.07);
+}
+
+.double-jump-status-title {
+  color: #c5d2bd;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.double-jump-status-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--lime);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.double-jump-status-value i {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 9px currentColor;
+}
+
+.double-jump-status-used .double-jump-status-value {
+  color: #f0ab8e;
+}
+
+.double-jump-status-used {
+  border-color: rgba(233, 153, 118, 0.3);
+  background: rgba(233, 153, 118, 0.07);
+}
+
+.double-jump-status-recovered .double-jump-status-value {
+  color: #a7d7d0;
+}
+
 .game-scene {
   position: relative;
   overflow: hidden;
@@ -2567,6 +2618,16 @@ kbd,
   min-height: 72px;
 }
 
+.double-jump-status-card {
+  min-height: 50px;
+  padding-inline: 16px;
+}
+
+.double-jump-status-title,
+.double-jump-status-value {
+  font-size: 14px;
+}
+
 .hud-label {
   font-weight: 700;
 }
@@ -3186,7 +3247,7 @@ kbd,
   .game-main {
     display: grid;
     grid-template-columns: minmax(48px, 56px) minmax(0, 1fr) minmax(48px, 56px);
-    grid-template-rows: auto auto auto auto;
+    grid-template-rows: auto auto auto auto auto;
     align-items: center;
     gap: 2px 6px;
     padding: 6px;
@@ -3257,9 +3318,33 @@ kbd,
     height: 3px;
   }
 
-  .game-scene {
+  .double-jump-status-card {
     grid-column: 2;
     grid-row: 4;
+    min-height: 26px;
+    gap: 6px;
+    margin: 0;
+    padding: 3px 8px;
+    border-radius: 6px;
+  }
+
+  .double-jump-status-title,
+  .double-jump-status-value {
+    font-size: 10px;
+  }
+
+  .double-jump-status-value {
+    gap: 5px;
+  }
+
+  .double-jump-status-value i {
+    width: 6px;
+    height: 6px;
+  }
+
+  .game-scene {
+    grid-column: 2;
+    grid-row: 5;
     min-width: 0;
     margin: 0;
     border-radius: 8px;
@@ -3268,7 +3353,7 @@ kbd,
   .game-controls {
     position: static;
     grid-column: 1 / -1;
-    grid-row: 4;
+    grid-row: 5;
     display: grid;
     grid-template-columns: inherit;
     align-self: stretch;
