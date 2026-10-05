@@ -7,6 +7,10 @@ export const STUMP_JUMP_CLEARANCE = 40;
 export const GAP_JUMP_CLEARANCE = 58;
 export const HIGH_STUMP_HEIGHT = 160;
 export const HIGH_STUMP_JUMP_CLEARANCE = HIGH_STUMP_HEIGHT;
+// Just above the 138px single-jump apex so only a double jump can clear the
+// gate. The high-stump 160px leaves no double-jump window at the slowest gate.
+export const ARCH_HEIGHT = 144;
+export const ARCH_JUMP_CLEARANCE = ARCH_HEIGHT;
 
 export interface VerticalMotion {
   height: number;

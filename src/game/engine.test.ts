@@ -23,6 +23,8 @@ import {
   PLAYER_COLLISION_WIDTH,
 } from './obstaclePattern';
 import {
+  ARCH_HEIGHT,
+  ARCH_JUMP_CLEARANCE,
   DOUBLE_JUMP_IMPULSE,
   HIGH_STUMP_HEIGHT,
   HIGH_STUMP_JUMP_CLEARANCE,
@@ -1340,6 +1342,79 @@ describe('ground gate (arch) clearance', () => {
 
     expect(run.overlapFrames).toBeGreaterThanOrEqual(17);
     expect(run.lowestOverlapHeight).toBeGreaterThan(SINGLE_JUMP_APEX);
+    expect(run.lowestOverlapHeight).toBeGreaterThan(ARCH_JUMP_CLEARANCE);
     expect(run.collisions, 'collisions of a high double jump').toBe(0);
+  });
+
+  it('collides at exactly the gate height and clears only above it', () => {
+    const initial = createGameState(LEVELS[0]!);
+    // A velocity of 825/32 px/s over 1/32 s lifts exactly as far as gravity
+    // pulls back, so the frame leaves the jump height untouched.
+    const crossGate = (jumpHeight: number) =>
+      advanceGame(
+        {
+          ...initial,
+          nextPickupIn: 5,
+          nextScheduledObstacleIndex: initial.obstacleSchedule.length,
+          player: {
+            jumpHeight,
+            jumpVelocity: 825 / 32,
+            jumpsUsed: 2,
+            slideHeld: false,
+            slideElapsed: 0,
+          },
+          obstacles: [
+            { id: 17, type: 'arch' as const, x: 246, width: OBSTACLE_WIDTHS.arch },
+          ],
+        },
+        1 / 32,
+        () => 0.9,
+      );
+
+    const atGateHeight = crossGate(ARCH_JUMP_CLEARANCE);
+    const aboveGateHeight = crossGate(ARCH_JUMP_CLEARANCE + 0.25);
+
+    expect(atGateHeight.player.jumpsUsed).toBe(2);
+    expect(atGateHeight.player.jumpHeight).toBe(ARCH_JUMP_CLEARANCE);
+    expect(atGateHeight.energy).toBeLessThan(67);
+    expect(atGateHeight.obstacles).toHaveLength(0);
+
+    expect(aboveGateHeight.player.jumpHeight).toBe(ARCH_JUMP_CLEARANCE + 0.25);
+    expect(aboveGateHeight.energy).toBeGreaterThan(99);
+    expect(aboveGateHeight.obstacles).toHaveLength(1);
+  });
+
+  it('puts the gate between the single-jump apex and the double-jump peak', () => {
+    const doubleJumpPeak =
+      SINGLE_JUMP_APEX + DOUBLE_JUMP_IMPULSE ** 2 / (2 * JUMP_GRAVITY);
+
+    expect(ARCH_JUMP_CLEARANCE).toBe(ARCH_HEIGHT);
+    expect(ARCH_HEIGHT).toBeGreaterThan(SINGLE_JUMP_APEX);
+    expect(ARCH_HEIGHT).toBeLessThan(doubleJumpPeak);
+  });
+
+  it('keeps a double-jump pass possible at the slowest gate speed in the game', () => {
+    const slowestGateSpeed = Math.min(
+      ...LEVELS.flatMap((level) =>
+        expandObstaclePattern(level)
+          .obstacles.filter((obstacle) => obstacle.type === 'arch')
+          .map((gate) => getRunSpeed(level, gate.contactDistance)),
+      ),
+    );
+    // Jumps are fixed at the best timing (second jump at the first-jump apex);
+    // only the gate position is swept.
+    const clearingContactFrames: number[] = [];
+    for (let contactFrame = 0; contactFrame < 120; contactFrame += 1) {
+      const run = runThroughGate({
+        speed: slowestGateSpeed,
+        contactFrame,
+        jumpFrames: [0, 25],
+      });
+      if (run.overlapFrames > 0 && run.collisions === 0) {
+        clearingContactFrames.push(contactFrame);
+      }
+    }
+
+    expect(clearingContactFrames.length).toBeGreaterThan(0);
   });
 });

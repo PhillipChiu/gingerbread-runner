@@ -8,6 +8,7 @@ import {
   type ScheduledObstacle,
 } from './obstaclePattern';
 import {
+  ARCH_JUMP_CLEARANCE,
   GAP_JUMP_CLEARANCE,
   DOUBLE_JUMP_IMPULSE,
   HIGH_STUMP_JUMP_CLEARANCE,
@@ -405,7 +406,7 @@ export function advanceGame(
       obstacle.x + obstacle.width > PLAYER_HITBOX_LEFT;
     const canAvoid =
       obstacle.type === 'arch'
-        ? isPlayerSliding(player)
+        ? isPlayerSliding(player) || player.jumpHeight > ARCH_JUMP_CLEARANCE
         : player.jumpHeight >
           (obstacle.type === 'gap'
             ? GAP_JUMP_CLEARANCE
