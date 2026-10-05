@@ -6,6 +6,7 @@ import {
   CUSTOM_GAME_TUNING,
   getRunSpeed,
   GROUND_Y,
+  isPlayerSliding,
   PICKUP_BOB_ANGULAR_SPEED,
   PICKUP_TOUCH_RADIUS,
   PLAYER_CENTER_X,
@@ -391,6 +392,8 @@ interface GatePlan {
   contactFrame: number;
   /** Frames on which jump is pressed, applied just before that frame advances. */
   jumpFrames?: readonly number[];
+  /** Frames on which slide is pressed and then held, in the air or on the ground. */
+  slideFrames?: readonly number[];
   /** Hold slide from frame 0. */
   holdSlide?: boolean;
 }
@@ -407,6 +410,7 @@ function runThroughGate({
   speed,
   contactFrame,
   jumpFrames = [],
+  slideFrames = [],
   holdSlide = false,
 }: GatePlan): GateRun {
   const level = { ...LEVELS[0]!, baseSpeed: speed, speedRamp: 0 };
@@ -438,6 +442,9 @@ function runThroughGate({
   ) {
     if (jumpFrames.includes(frame)) {
       state = applyPlayerAction(state, 'jump');
+    }
+    if (slideFrames.includes(frame)) {
+      state = applyPlayerAction(state, 'slideStart');
     }
 
     const before = state;
@@ -1347,6 +1354,65 @@ describe('ground gate (arch) clearance', () => {
     expect(run.collisions, 'collisions of a high double jump').toBe(0);
   });
 
+  describe('when the slide is pressed in the air', () => {
+    // The slide is held from frame 40, long before a single jump lands about
+    // 49.1 frames after liftoff. It only protects the runner while the runner is
+    // on the ground, so what counts is whether the gate arrives before or after
+    // the touchdown.
+    it('collides with a gate that arrives before the runner has landed', () => {
+      const run = runThroughGate({
+        speed: GATE_SPEED,
+        contactFrame: 46,
+        jumpFrames: [0],
+        slideFrames: [40],
+      });
+
+      expect(run.overlapFrames).toBeGreaterThanOrEqual(17);
+      expect(run.highestOverlapHeight).toBeGreaterThan(0);
+      expect(run.collisions, 'collisions of a gate that arrives mid-air').toBe(1);
+    });
+
+    it('lets the held slide pass a gate that arrives after the runner has landed', () => {
+      const run = runThroughGate({
+        speed: GATE_SPEED,
+        contactFrame: 52,
+        jumpFrames: [0],
+        slideFrames: [40],
+      });
+
+      expect(run.overlapFrames).toBeGreaterThanOrEqual(17);
+      expect(run.highestOverlapHeight, 'on the ground for the whole overlap').toBe(0);
+      expect(run.collisions, 'collisions of a gate that arrives after landing').toBe(0);
+    });
+
+    it('still clears the whole gate overlap with a high double jump', () => {
+      const run = runThroughGate({
+        speed: GATE_SPEED,
+        contactFrame: 34,
+        jumpFrames: [0, 25],
+        slideFrames: [30],
+      });
+
+      expect(run.overlapFrames).toBeGreaterThanOrEqual(17);
+      expect(run.lowestOverlapHeight).toBeGreaterThan(ARCH_JUMP_CLEARANCE);
+      expect(run.collisions, 'collisions of a high double jump').toBe(0);
+    });
+
+    it('still collides when a double jump sinks below the gate before the overlap ends', () => {
+      const run = runThroughGate({
+        speed: GATE_SPEED,
+        contactFrame: 50,
+        jumpFrames: [0, 25],
+        slideFrames: [30],
+      });
+
+      expect(run.overlapFrames).toBeGreaterThanOrEqual(17);
+      expect(run.highestOverlapHeight).toBeGreaterThan(SINGLE_JUMP_APEX);
+      expect(run.lowestOverlapHeight).toBeLessThan(SINGLE_JUMP_APEX);
+      expect(run.collisions, 'collisions of a sinking double jump').toBe(1);
+    });
+  });
+
   it('collides at exactly the gate height and clears only above it', () => {
     const initial = createGameState(LEVELS[0]!);
     // A velocity of 825/32 px/s over 1/32 s lifts exactly as far as gravity
@@ -1617,5 +1683,107 @@ describe('ground gate (arch) swept overlap within one frame', () => {
 
     expect(after.player.jumpHeight).toBe(0);
     expectGateMissed(after);
+  });
+
+  it('still lets a grounded held slide pass a gate that reaches the hitbox mid-frame', () => {
+    const after = advanceOneGateFrame({
+      gateX: gateEnteringHitbox(3),
+      player: { slideHeld: true },
+    });
+
+    expect(after.player.jumpHeight).toBe(0);
+    expectGateMissed(after);
+  });
+
+  describe('when the runner touches down within the frame while holding the slide', () => {
+    // A slide held in the air only protects the runner once it is on the ground,
+    // so the grounded slide the frame ends in must not excuse an overlap that
+    // began while the runner was still airborne under the gate height.
+
+    /** A single jump `height` px above the ground on its way down, slide held. */
+    const fallingSingleJump = (height: number) => ({
+      jumpHeight: height,
+      jumpVelocity: -Math.sqrt(JUMP_IMPULSE ** 2 - 2 * JUMP_GRAVITY * height),
+      jumpsUsed: 1,
+      slideHeld: true,
+    });
+    /** A jump lands at the speed it left the ground with. */
+    const secondsUntilTouchdown = (player: { jumpVelocity: number }) =>
+      (JUMP_IMPULSE + player.jumpVelocity) / JUMP_GRAVITY;
+    const secondsUntilGateArrives = (outside: number) => outside / GATE_SPEED;
+
+    it('collides when the gate reaches the hitbox before the runner touches down', () => {
+      // Review repro: a real single jump enters its last 60 fps frame about 1 px
+      // up and falling at 673 px/s. The gate arrives 1.2 ms in and the runner is
+      // down at 1.5 ms, so the frame ends in a grounded slide.
+      const player = fallingSingleJump(1);
+
+      expect(
+        secondsUntilGateArrives(0.3),
+        'the gate arrives while the runner is airborne',
+      ).toBeLessThan(secondsUntilTouchdown(player));
+      expect(
+        secondsUntilTouchdown(player),
+        'the runner touches down inside the frame',
+      ).toBeLessThan(GATE_FRAME_SECONDS);
+
+      const after = advanceOneGateFrame({
+        gateX: gateEnteringHitbox(0.3),
+        player,
+      });
+
+      expect(isPlayerSliding(after.player), 'frame ends in a grounded slide').toBe(
+        true,
+      );
+      expectGateHit(after);
+    });
+
+    it('collides when the gate reaches the hitbox long before the runner touches down', () => {
+      // A runner that enters its last frame lower down touches down later in it:
+      // here 12 ms in, after the gate has been inside the hitbox since 3.9 ms.
+      const player = fallingSingleJump(8);
+
+      expect(
+        secondsUntilGateArrives(1),
+        'the gate arrives while the runner is airborne',
+      ).toBeLessThan(secondsUntilTouchdown(player));
+      expect(
+        secondsUntilTouchdown(player),
+        'the runner touches down inside the frame',
+      ).toBeLessThan(GATE_FRAME_SECONDS);
+
+      const after = advanceOneGateFrame({
+        gateX: gateEnteringHitbox(1),
+        player,
+      });
+
+      expect(isPlayerSliding(after.player), 'frame ends in a grounded slide').toBe(
+        true,
+      );
+      expectGateHit(after);
+    });
+
+    it('lets the held slide pass a gate that only reaches the hitbox after the runner has touched down', () => {
+      const player = fallingSingleJump(1);
+
+      expect(
+        secondsUntilTouchdown(player),
+        'the runner is on the ground when the gate arrives',
+      ).toBeLessThan(secondsUntilGateArrives(0.5));
+      expect(
+        secondsUntilGateArrives(0.5),
+        'the gate still arrives inside the frame',
+      ).toBeLessThan(GATE_FRAME_SECONDS);
+
+      const after = advanceOneGateFrame({
+        gateX: gateEnteringHitbox(0.5),
+        player,
+      });
+
+      expect(isPlayerSliding(after.player), 'frame ends in a grounded slide').toBe(
+        true,
+      );
+      expectGateMissed(after);
+    });
   });
 });

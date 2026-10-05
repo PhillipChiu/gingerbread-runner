@@ -320,20 +320,27 @@ export function applyPlayerAction(
   };
 }
 
+interface GateFrameOverlap {
+  /** Lowest runner height while the gate overlaps the hitbox. */
+  lowestHeight: number;
+  /** The runner is already sliding on the ground when the gate reaches the hitbox. */
+  slidingOnArrival: boolean;
+}
+
 /**
- * Lowest runner height while a ground gate overlaps the runner hitbox during
- * one frame, or null when it never does. The gate and the runner both move
- * smoothly within the frame, so the overlap lasts from the moment the gate's
- * left edge reaches the hitbox until its right edge leaves it. A jump arc is
- * concave, so its lowest point over that span is at one of the two ends.
+ * How a ground gate overlaps the runner hitbox during one frame, or null when
+ * it never does. The gate and the runner both move smoothly within the frame,
+ * so the overlap lasts from the moment the gate's left edge reaches the hitbox
+ * until its right edge leaves it. A jump arc is concave, so its lowest point
+ * over that span is at one of the two ends.
  */
-function getLowestHeightWhileGateOverlaps(
+function getGateFrameOverlap(
   startX: number,
   endX: number,
   width: number,
   deltaSeconds: number,
   player: PlayerState,
-): number | null {
+): GateFrameOverlap | null {
   if (endX >= PLAYER_HITBOX_RIGHT || startX + width <= PLAYER_HITBOX_LEFT) {
     return null;
   }
@@ -345,14 +352,29 @@ function getLowestHeightWhileGateOverlaps(
     travel > 0
       ? Math.min(1, (startX + width - PLAYER_HITBOX_LEFT) / travel)
       : 1;
-  const heightAt = (fraction: number) =>
+  const motionAt = (fraction: number) =>
     advanceVerticalMotion(
       player.jumpHeight,
       player.jumpVelocity,
       deltaSeconds * fraction,
-    ).height;
+    );
+  const arrival = motionAt(enterFraction);
+  const departure = motionAt(exitFraction);
 
-  return Math.min(heightAt(enterFraction), heightAt(exitFraction));
+  return {
+    lowestHeight: Math.min(arrival.height, departure.height),
+    // A runner on the ground stays there for the rest of the frame, so a slide
+    // that already holds when the gate arrives covers the whole overlap. One
+    // that is still in the air then gets no cover, not even for the part after
+    // it lands: it would have had to stay above the gate height until touching
+    // down, which a falling runner cannot do. Judging the slide by the state
+    // the frame ends in would excuse that airborne stretch after the fact.
+    slidingOnArrival: isPlayerSliding({
+      ...player,
+      jumpHeight: arrival.height,
+      jumpVelocity: arrival.velocity,
+    }),
+  };
 }
 
 export function advanceGame(
@@ -438,10 +460,12 @@ export function advanceGame(
   for (const [index, obstacle] of obstacles.entries()) {
     // A frame is long enough for a gate to enter or leave the hitbox while the
     // runner crosses the gate height, so gates are judged over the whole span
-    // they overlap the hitbox instead of by the end-of-frame state alone.
-    const gateLowestHeight =
+    // they overlap the hitbox instead of by the end-of-frame state alone. That
+    // includes the slide: it only covers a runner already on the ground when
+    // the gate arrives, not one that merely ends the frame in a slide.
+    const gateOverlap =
       obstacle.type === 'arch'
-        ? getLowestHeightWhileGateOverlaps(
+        ? getGateFrameOverlap(
             // Obstacles spawned this frame have no stored previous position.
             state.obstacles[index]?.x ?? obstacle.x + distanceDelta,
             obstacle.x,
@@ -452,13 +476,14 @@ export function advanceGame(
         : null;
     const overlapsRunner =
       obstacle.type === 'arch'
-        ? gateLowestHeight !== null
+        ? gateOverlap !== null
         : obstacle.x < PLAYER_HITBOX_RIGHT &&
           obstacle.x + obstacle.width > PLAYER_HITBOX_LEFT;
     const canAvoid =
       obstacle.type === 'arch'
-        ? isPlayerSliding(player) ||
-          (gateLowestHeight ?? 0) > ARCH_JUMP_CLEARANCE
+        ? gateOverlap !== null &&
+          (gateOverlap.slidingOnArrival ||
+            gateOverlap.lowestHeight > ARCH_JUMP_CLEARANCE)
         : player.jumpHeight >
           (obstacle.type === 'gap'
             ? GAP_JUMP_CLEARANCE
