@@ -320,6 +320,41 @@ export function applyPlayerAction(
   };
 }
 
+/**
+ * Lowest runner height while a ground gate overlaps the runner hitbox during
+ * one frame, or null when it never does. The gate and the runner both move
+ * smoothly within the frame, so the overlap lasts from the moment the gate's
+ * left edge reaches the hitbox until its right edge leaves it. A jump arc is
+ * concave, so its lowest point over that span is at one of the two ends.
+ */
+function getLowestHeightWhileGateOverlaps(
+  startX: number,
+  endX: number,
+  width: number,
+  deltaSeconds: number,
+  player: PlayerState,
+): number | null {
+  if (endX >= PLAYER_HITBOX_RIGHT || startX + width <= PLAYER_HITBOX_LEFT) {
+    return null;
+  }
+
+  const travel = startX - endX;
+  const enterFraction =
+    travel > 0 ? Math.max(0, (startX - PLAYER_HITBOX_RIGHT) / travel) : 0;
+  const exitFraction =
+    travel > 0
+      ? Math.min(1, (startX + width - PLAYER_HITBOX_LEFT) / travel)
+      : 1;
+  const heightAt = (fraction: number) =>
+    advanceVerticalMotion(
+      player.jumpHeight,
+      player.jumpVelocity,
+      deltaSeconds * fraction,
+    ).height;
+
+  return Math.min(heightAt(enterFraction), heightAt(exitFraction));
+}
+
 export function advanceGame(
   state: GameState,
   deltaSeconds: number,
@@ -400,13 +435,30 @@ export function advanceGame(
   let collidedThisFrame = false;
   const remainingObstacles: Obstacle[] = [];
 
-  for (const obstacle of obstacles) {
+  for (const [index, obstacle] of obstacles.entries()) {
+    // A frame is long enough for a gate to enter or leave the hitbox while the
+    // runner crosses the gate height, so gates are judged over the whole span
+    // they overlap the hitbox instead of by the end-of-frame state alone.
+    const gateLowestHeight =
+      obstacle.type === 'arch'
+        ? getLowestHeightWhileGateOverlaps(
+            // Obstacles spawned this frame have no stored previous position.
+            state.obstacles[index]?.x ?? obstacle.x + distanceDelta,
+            obstacle.x,
+            obstacle.width,
+            delta,
+            state.player,
+          )
+        : null;
     const overlapsRunner =
-      obstacle.x < PLAYER_HITBOX_RIGHT &&
-      obstacle.x + obstacle.width > PLAYER_HITBOX_LEFT;
+      obstacle.type === 'arch'
+        ? gateLowestHeight !== null
+        : obstacle.x < PLAYER_HITBOX_RIGHT &&
+          obstacle.x + obstacle.width > PLAYER_HITBOX_LEFT;
     const canAvoid =
       obstacle.type === 'arch'
-        ? isPlayerSliding(player) || player.jumpHeight > ARCH_JUMP_CLEARANCE
+        ? isPlayerSliding(player) ||
+          (gateLowestHeight ?? 0) > ARCH_JUMP_CLEARANCE
         : player.jumpHeight >
           (obstacle.type === 'gap'
             ? GAP_JUMP_CLEARANCE

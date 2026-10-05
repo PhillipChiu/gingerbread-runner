@@ -13,6 +13,7 @@ import {
   PLAYER_X,
   WORLD_HEIGHT,
   type GameState,
+  type PlayerState,
 } from './engine';
 import { LEVELS } from './levels';
 import {
@@ -1416,5 +1417,205 @@ describe('ground gate (arch) clearance', () => {
     }
 
     expect(clearingContactFrames.length).toBeGreaterThan(0);
+  });
+});
+
+describe('ground gate (arch) swept overlap within one frame', () => {
+  // Level 1's slowest gate runs at about 257 px/s, so a 1/60 s frame moves the
+  // gate only 4.3 px. That is little against its 141 px of overlap, yet enough
+  // for the runner to cross the 144 px gate height, or for the gate to enter or
+  // leave the hitbox, between the start and the end state of a single frame.
+  const GATE_SPEED = 258;
+  const GATE_WIDTH = OBSTACLE_WIDTHS.arch;
+  // The runner hitbox edges advanceGame tests against (private there).
+  const HITBOX_RIGHT = PLAYER_X + PLAYER_WIDTH - 6;
+  const HITBOX_LEFT = HITBOX_RIGHT - PLAYER_COLLISION_WIDTH;
+
+  /** Gate whose right edge starts `inside` px past the hitbox's left edge. */
+  const gateLeavingHitbox = (inside: number) =>
+    HITBOX_LEFT + inside - GATE_WIDTH;
+  /** Gate whose left edge starts `outside` px beyond the hitbox's right edge. */
+  const gateEnteringHitbox = (outside: number) => HITBOX_RIGHT + outside;
+
+  /** Advances exactly one frame past a single gate at a constant run speed. */
+  function advanceOneGateFrame({
+    gateX,
+    player,
+    speed = GATE_SPEED,
+    frameSeconds = GATE_FRAME_SECONDS,
+  }: {
+    gateX: number;
+    player: Partial<PlayerState>;
+    speed?: number;
+    frameSeconds?: number;
+  }): GameState {
+    const level = { ...LEVELS[0]!, baseSpeed: speed, speedRamp: 0 };
+    const initial = createGameState(level);
+
+    return advanceGame(
+      {
+        ...initial,
+        nextPickupIn: 5,
+        nextScheduledObstacleIndex: initial.obstacleSchedule.length,
+        player: { ...initial.player, ...player },
+        obstacles: [
+          { id: 17, type: 'arch' as const, x: gateX, width: GATE_WIDTH },
+        ],
+      },
+      frameSeconds,
+      () => 0.9,
+    );
+  }
+
+  // A hit costs 34 energy and removes the gate; a miss only pays the passive
+  // drain of one frame and leaves the gate behind.
+  function expectGateHit(after: GameState): void {
+    expect(after.energy, 'energy after the gate hit').toBeLessThan(67);
+    expect(after.obstacles, 'gate removed by the hit').toHaveLength(0);
+  }
+
+  function expectGateMissed(after: GameState): void {
+    expect(after.energy, 'energy after passing the gate').toBeGreaterThan(99);
+    expect(after.obstacles, 'gate left behind').toHaveLength(1);
+  }
+
+  it('collides when a descending runner sinks below the gate height and the gate then leaves the hitbox within the same frame', () => {
+    // Review repro: the runner crosses 144 px at about 10.6 ms, the gate's right
+    // edge leaves the hitbox at about 13.6 ms, and the 16.7 ms frame ends with
+    // no overlap left for an end-of-frame check to find.
+    const player = { jumpHeight: 149, jumpVelocity: -462.5, jumpsUsed: 2 };
+    const gateX = gateLeavingHitbox(3.5);
+    const leaveSeconds = 3.5 / GATE_SPEED;
+
+    expect(player.jumpHeight).toBeGreaterThan(ARCH_JUMP_CLEARANCE);
+    expect(leaveSeconds).toBeLessThan(GATE_FRAME_SECONDS);
+    expect(
+      getVerticalHeightAtTime(
+        player.jumpHeight,
+        player.jumpVelocity,
+        leaveSeconds,
+      ),
+    ).toBeLessThan(ARCH_JUMP_CLEARANCE);
+    expect(
+      gateX + GATE_WIDTH - GATE_SPEED * GATE_FRAME_SECONDS,
+      'gate right edge at the end of the frame',
+    ).toBeLessThan(HITBOX_LEFT);
+
+    expectGateHit(advanceOneGateFrame({ gateX, player }));
+  });
+
+  it('collides when the gate reaches the hitbox before a rising runner has climbed above the gate height', () => {
+    // The runner is still below 144 px when the gate enters at about 1.9 ms but
+    // ends the frame at about 150 px, which an end-of-frame check would accept.
+    const player = { jumpHeight: 142.3, jumpVelocity: 500, jumpsUsed: 2 };
+    const gateX = gateEnteringHitbox(0.5);
+    const enterSeconds = 0.5 / GATE_SPEED;
+
+    expect(
+      getVerticalHeightAtTime(
+        player.jumpHeight,
+        player.jumpVelocity,
+        enterSeconds,
+      ),
+    ).toBeLessThan(ARCH_JUMP_CLEARANCE);
+    expect(
+      getVerticalHeightAtTime(
+        player.jumpHeight,
+        player.jumpVelocity,
+        GATE_FRAME_SECONDS,
+      ),
+    ).toBeGreaterThan(ARCH_JUMP_CLEARANCE);
+
+    expectGateHit(advanceOneGateFrame({ gateX, player }));
+  });
+
+  it('lets a rising runner pass a gate that only reaches the hitbox after the runner is above the gate height', () => {
+    const player = { jumpHeight: 142.3, jumpVelocity: 500, jumpsUsed: 2 };
+    const gateX = gateEnteringHitbox(3);
+    const enterSeconds = 3 / GATE_SPEED;
+
+    expect(
+      getVerticalHeightAtTime(
+        player.jumpHeight,
+        player.jumpVelocity,
+        enterSeconds,
+      ),
+    ).toBeGreaterThan(ARCH_JUMP_CLEARANCE);
+
+    expectGateMissed(advanceOneGateFrame({ gateX, player }));
+  });
+
+  describe('when the gate leaves the hitbox exactly mid-frame', () => {
+    // 256 px/s over 1/32 s moves the gate exactly 8 px, so a gate whose right
+    // edge starts 4 px inside the hitbox leaves it at exactly 1/64 s. A runner
+    // at its apex falls by 0.5 * gravity * (1/64)^2 over that time, so every
+    // number below is exact in floating point.
+    const SPEED = 256;
+    const FRAME_SECONDS = 1 / 32;
+    const LEAVE_SECONDS = 1 / 64;
+    const FALL_UNTIL_LEAVING = 0.5 * JUMP_GRAVITY * LEAVE_SECONDS ** 2;
+    const gateX = gateLeavingHitbox(4);
+
+    const apexPlayerReaching = (heightWhenLeaving: number) => ({
+      jumpHeight: heightWhenLeaving + FALL_UNTIL_LEAVING,
+      jumpVelocity: 0,
+      jumpsUsed: 2,
+    });
+
+    it('collides when the runner is at exactly the gate height as the gate leaves', () => {
+      const player = apexPlayerReaching(ARCH_JUMP_CLEARANCE);
+
+      expect(
+        getVerticalHeightAtTime(
+          player.jumpHeight,
+          player.jumpVelocity,
+          LEAVE_SECONDS,
+        ),
+      ).toBe(ARCH_JUMP_CLEARANCE);
+      expect(gateX + GATE_WIDTH - SPEED * FRAME_SECONDS).toBeLessThan(
+        HITBOX_LEFT,
+      );
+
+      expectGateHit(
+        advanceOneGateFrame({
+          gateX,
+          player,
+          speed: SPEED,
+          frameSeconds: FRAME_SECONDS,
+        }),
+      );
+    });
+
+    it('passes when the runner is above the gate height until the gate leaves, even if it sinks below afterwards', () => {
+      const after = advanceOneGateFrame({
+        gateX,
+        player: apexPlayerReaching(ARCH_JUMP_CLEARANCE + 0.25),
+        speed: SPEED,
+        frameSeconds: FRAME_SECONDS,
+      });
+
+      expect(after.player.jumpHeight).toBeLessThan(ARCH_JUMP_CLEARANCE);
+      expectGateMissed(after);
+    });
+  });
+
+  it('lets a runner that stays above the gate height for the whole swept overlap pass', () => {
+    const after = advanceOneGateFrame({
+      gateX: gateLeavingHitbox(3.5),
+      player: { jumpHeight: 160, jumpVelocity: -462.5, jumpsUsed: 2 },
+    });
+
+    expect(after.player.jumpHeight).toBeGreaterThan(ARCH_JUMP_CLEARANCE);
+    expectGateMissed(after);
+  });
+
+  it('still lets a grounded held slide pass a gate that leaves the hitbox mid-frame', () => {
+    const after = advanceOneGateFrame({
+      gateX: gateLeavingHitbox(3.5),
+      player: { slideHeld: true },
+    });
+
+    expect(after.player.jumpHeight).toBe(0);
+    expectGateMissed(after);
   });
 });
