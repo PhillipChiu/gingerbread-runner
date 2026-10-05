@@ -119,6 +119,9 @@ const PICKUP_HEIGHTS = [
 ] as const;
 const PLAYER_HITBOX_LEFT = PLAYER_X + 7;
 const PLAYER_HITBOX_RIGHT = PLAYER_X + PLAYER_WIDTH - 6;
+const PICKUP_INTERACTION_HALF_WIDTH =
+  Math.max(RUNNER_DRAW_BOUNDS.width, SLIDE_DRAW_BOUNDS.width) / 2 +
+  PICKUP_TOUCH_RADIUS;
 const OBSTACLE_SPAWN_RIGHT_EDGE = WORLD_WIDTH + 48;
 const PICKUP_SPAWN_X = WORLD_WIDTH + 44;
 
@@ -189,17 +192,26 @@ function pickupInterruptsObstacle(
   predictedDistance: number,
   state: GameState,
 ): boolean {
+  const interactionStartDistance =
+    predictedDistance - PICKUP_INTERACTION_HALF_WIDTH;
+  const interactionEndDistance =
+    predictedDistance + PICKUP_INTERACTION_HALF_WIDTH;
+  const overlapsProtectedZone = (
+    startDistance: number,
+    endDistance: number,
+  ): boolean =>
+    interactionEndDistance >= startDistance &&
+    interactionStartDistance < endDistance;
+
   return (
-    state.obstacleSections.some(
-      (section) =>
-        predictedDistance >=
-          section.firstArchContactDistance - SECTION_PREVIEW_LEAD_DISTANCE &&
-        predictedDistance < section.recoveryEndDistance,
+    state.obstacleSections.some((section) =>
+      overlapsProtectedZone(
+        section.firstArchContactDistance - SECTION_PREVIEW_LEAD_DISTANCE,
+        section.recoveryEndDistance,
+      ),
     ) ||
-    state.obstacleQuietZones.some(
-      (zone) =>
-        predictedDistance >= zone.startDistance &&
-        predictedDistance < zone.endDistance,
+    state.obstacleQuietZones.some((zone) =>
+      overlapsProtectedZone(zone.startDistance, zone.endDistance),
     )
   );
 }

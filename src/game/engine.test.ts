@@ -6,6 +6,7 @@ import {
   getRunSpeed,
   GROUND_Y,
   PICKUP_BOB_ANGULAR_SPEED,
+  PICKUP_TOUCH_RADIUS,
   PLAYER_CENTER_X,
   PLAYER_WIDTH,
   PLAYER_X,
@@ -28,7 +29,10 @@ import {
   JUMP_IMPULSE,
   getVerticalHeightAtTime,
 } from './physics';
-import { RUNNER_DRAW_BOUNDS } from './runnerAnimation';
+import {
+  RUNNER_DRAW_BOUNDS,
+  SLIDE_DRAW_BOUNDS,
+} from './runnerAnimation';
 
 const SIMULATION_FRAME_SECONDS = 0.05;
 
@@ -1119,6 +1123,58 @@ describe('runner state', () => {
 
     expect(state.pickups).toHaveLength(0);
   });
+
+  it.each(['start', 'end'] as const)(
+    'does not spawn a pickup just outside a quiet-zone %s boundary when its touch range overlaps',
+    (boundary) => {
+      const initial = createGameState(LEVELS[0]!);
+      const spawnState = {
+        ...initial,
+        obstacleSchedule: [],
+        obstacleSections: [],
+        obstacleQuietZones: [],
+        nextScheduledObstacleIndex: 0,
+        nextPickupIn: 0,
+      };
+      const preview = advanceGame(spawnState, 0.05, () => 0.9);
+      const previewPickup = preview.pickups[0]!;
+      const predictedPickupDistance =
+        preview.distance + previewPickup.x - PLAYER_CENTER_X;
+      const interactionHalfWidth =
+        Math.max(RUNNER_DRAW_BOUNDS.width, SLIDE_DRAW_BOUNDS.width) / 2 +
+        PICKUP_TOUCH_RADIUS;
+      const quietZone =
+        boundary === 'start'
+          ? {
+              startDistance: predictedPickupDistance + 1,
+              endDistance: predictedPickupDistance + 101,
+            }
+          : {
+              startDistance: predictedPickupDistance - 101,
+              endDistance: predictedPickupDistance - 1,
+            };
+
+      expect(
+        boundary === 'start'
+          ? predictedPickupDistance < quietZone.startDistance
+          : predictedPickupDistance >= quietZone.endDistance,
+      ).toBe(true);
+      expect(
+        predictedPickupDistance + interactionHalfWidth >=
+          quietZone.startDistance &&
+          predictedPickupDistance - interactionHalfWidth <
+            quietZone.endDistance,
+      ).toBe(true);
+
+      const state = advanceGame(
+        { ...spawnState, obstacleQuietZones: [quietZone] },
+        0.05,
+        () => 0.9,
+      );
+
+      expect(state.pickups).toHaveLength(0);
+    },
+  );
 
   it('finishes a level at its configured distance goal', () => {
     const initial = createGameState(LEVELS[0]!);
