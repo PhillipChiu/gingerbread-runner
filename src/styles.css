@@ -1231,7 +1231,7 @@ kbd {
 
 .hud-grid {
   display: grid;
-  grid-template-columns: 0.85fr 1.15fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 9px;
 }
 
@@ -1369,6 +1369,61 @@ kbd {
   bottom: 0;
   width: 2px;
   background: rgba(238, 242, 202, 0.65);
+}
+
+.double-jump-status-card {
+  min-height: 66px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0;
+  padding: 10px 13px;
+  border: 1px solid rgba(215, 228, 143, 0.22);
+  border-radius: 7px;
+  color: #e8ecd9;
+  background: rgba(215, 228, 143, 0.07);
+}
+
+.double-jump-status-title {
+  color: #c5d2bd;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.double-jump-status-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--lime);
+  font-size: 11px;
+  white-space: normal;
+}
+
+.double-jump-status-compact {
+  display: none;
+}
+
+.double-jump-status-value i {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 9px currentColor;
+}
+
+.double-jump-status-used .double-jump-status-value {
+  color: #f0ab8e;
+}
+
+.double-jump-status-used {
+  border-color: rgba(233, 153, 118, 0.3);
+  background: rgba(233, 153, 118, 0.07);
+}
+
+.double-jump-status-recovered .double-jump-status-value {
+  color: #a7d7d0;
 }
 
 .game-scene {
@@ -2218,8 +2273,21 @@ kbd {
   }
 
   .hud-grid {
-    grid-template-columns: 0.86fr 1.14fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 5px;
+  }
+
+  .double-jump-status-card {
+    flex-wrap: wrap;
+    gap: 3px;
+  }
+
+  .double-jump-status-full {
+    display: none;
+  }
+
+  .double-jump-status-compact {
+    display: inline;
   }
 
   .hud-card {
@@ -2565,6 +2633,16 @@ kbd,
 
 .hud-card {
   min-height: 72px;
+}
+
+.double-jump-status-card {
+  min-height: 50px;
+  padding-inline: 16px;
+}
+
+.double-jump-status-title,
+.double-jump-status-value {
+  font-size: 14px;
 }
 
 .hud-label {
@@ -3195,8 +3273,23 @@ kbd,
   .hud-grid {
     grid-column: 1 / -1;
     grid-row: 1;
-    grid-template-columns: 0.9fr 1.1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 6px;
+  }
+
+  .hud-grid > .double-jump-status-card {
+    min-width: 0;
+    min-height: 34px;
+    gap: 4px;
+    padding: 3px 6px;
+  }
+
+  .double-jump-status-full {
+    display: none;
+  }
+
+  .double-jump-status-compact {
+    display: inline;
   }
 
   .hud-card {
@@ -3255,6 +3348,23 @@ kbd,
     grid-column: 2;
     grid-row: 3;
     height: 3px;
+  }
+
+  .double-jump-status-title,
+  .double-jump-status-value {
+    font-size: 10px;
+  }
+
+  .double-jump-status-value {
+    min-width: 0;
+    gap: 5px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .double-jump-status-value i {
+    width: 6px;
+    height: 6px;
   }
 
   .game-scene {
@@ -3573,8 +3683,13 @@ kbd,
   }
 
   .game-controls .control-hint > span:last-child {
+    display: -webkit-box;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
   }
 }

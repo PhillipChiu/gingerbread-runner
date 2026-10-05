@@ -1,3 +1,5 @@
+import { MAX_LEVELS } from './levels';
+
 export const PROGRESS_STORAGE_KEY = 'cloudtail-runner.progress.v1';
 
 export interface ProgressData {
@@ -19,6 +21,8 @@ export const DEFAULT_PROGRESS: ProgressData = {
   totalCollectibles: 0,
 };
 
+const LEGACY_FINAL_LEVEL = 10;
+
 function normalizeProgress(value: unknown): ProgressData {
   if (!value || typeof value !== 'object') {
     return { ...DEFAULT_PROGRESS, clearedLevels: [], bestScores: {} };
@@ -29,7 +33,7 @@ function normalizeProgress(value: unknown): ProgressData {
     ? [...new Set(candidate.clearedLevels)]
         .filter(
           (level): level is number =>
-            Number.isInteger(level) && level >= 1 && level <= 10,
+            Number.isInteger(level) && level >= 1 && level <= MAX_LEVELS,
         )
         .sort((first, second) => first - second)
     : [];
@@ -41,7 +45,7 @@ function normalizeProgress(value: unknown): ProgressData {
       if (
         Number.isInteger(level) &&
         level >= 1 &&
-        level <= 10 &&
+        level <= MAX_LEVELS &&
         typeof score === 'number' &&
         Number.isFinite(score) &&
         score >= 0
@@ -51,11 +55,20 @@ function normalizeProgress(value: unknown): ProgressData {
     }
   }
 
-  const unlockedLevel =
+  const storedUnlockedLevel =
     typeof candidate.unlockedLevel === 'number' &&
     Number.isFinite(candidate.unlockedLevel)
-      ? Math.min(Math.max(Math.floor(candidate.unlockedLevel), 1), 10)
+      ? Math.min(
+          Math.max(Math.floor(candidate.unlockedLevel), 1),
+          MAX_LEVELS,
+        )
       : 1;
+  const unlockedLevel = Math.max(
+    storedUnlockedLevel,
+    clearedLevels.includes(LEGACY_FINAL_LEVEL)
+      ? LEGACY_FINAL_LEVEL + 1
+      : 1,
+  );
   const totalCollectibles =
     typeof candidate.totalCollectibles === 'number' &&
     Number.isFinite(candidate.totalCollectibles)
@@ -101,7 +114,11 @@ export function recordRun(
   collectibles: number,
   cleared: boolean,
 ): ProgressData {
-  const safeLevel = Math.min(Math.max(Math.floor(level), 1), 10);
+  const safeLevel = Math.min(Math.max(Math.floor(level), 1), MAX_LEVELS);
+  const safeUnlockedLevel = Math.min(
+    Math.max(Math.floor(progress.unlockedLevel), 1),
+    MAX_LEVELS,
+  );
   const safeScore = Math.max(0, Math.floor(score));
   const clearedLevels = cleared
     ? [...new Set([...progress.clearedLevels, safeLevel])].sort(
@@ -111,8 +128,8 @@ export function recordRun(
 
   return {
     unlockedLevel: cleared
-      ? Math.max(progress.unlockedLevel, Math.min(safeLevel + 1, 10))
-      : progress.unlockedLevel,
+      ? Math.max(safeUnlockedLevel, Math.min(safeLevel + 1, MAX_LEVELS))
+      : safeUnlockedLevel,
     clearedLevels,
     bestScores: {
       ...progress.bestScores,

@@ -4,16 +4,37 @@ import {
   applyPlayerAction,
   createGameState,
   getRunSpeed,
+  GROUND_Y,
   PICKUP_BOB_ANGULAR_SPEED,
+  PICKUP_TOUCH_RADIUS,
   PLAYER_CENTER_X,
   PLAYER_WIDTH,
   PLAYER_X,
+  WORLD_HEIGHT,
+  type GameState,
 } from './engine';
 import { LEVELS } from './levels';
 import {
   expandObstaclePattern,
   getObstacleCue,
+  HIGH_STUMP_CUE_MARGIN,
+  OBSTACLE_WIDTHS,
+  PLAYER_COLLISION_WIDTH,
 } from './obstaclePattern';
+import {
+  DOUBLE_JUMP_IMPULSE,
+  HIGH_STUMP_HEIGHT,
+  HIGH_STUMP_JUMP_CLEARANCE,
+  JUMP_GRAVITY,
+  JUMP_IMPULSE,
+  getVerticalHeightAtTime,
+} from './physics';
+import {
+  RUNNER_DRAW_BOUNDS,
+  SLIDE_DRAW_BOUNDS,
+} from './runnerAnimation';
+
+const SIMULATION_FRAME_SECONDS = 0.05;
 
 function getActionableJumpDistances(
   level: (typeof LEVELS)[number],
@@ -72,9 +93,292 @@ function expectJumpAtCueToClearObstacle(
   ).toBe(true);
 }
 
-describe('ten-stage runner data', () => {
-  it('contains ten stages with increasing distance and pace', () => {
-    expect(LEVELS).toHaveLength(10);
+function createIsolatedObstacleState(
+  level: (typeof LEVELS)[number],
+  obstacles: ReturnType<typeof expandObstaclePattern>['obstacles'],
+  distance: number,
+): GameState {
+  const initial = createGameState(level);
+
+  return {
+    ...initial,
+    distance,
+    obstacleSchedule: obstacles,
+    obstacleSections: [],
+    obstacleQuietZones: [],
+    nextScheduledObstacleIndex: 0,
+    nextPickupIn: 5,
+  };
+}
+
+function spawnPickupAtHeightIndex(heightIndex: number): GameState {
+  const initial = createGameState(LEVELS[0]!);
+  let randomCall = 0;
+  const random = (): number => {
+    randomCall += 1;
+    return randomCall === 1 ? (heightIndex + 0.25) / 4 : 0.5;
+  };
+
+  return advanceGame(
+    {
+      ...initial,
+      obstacleSchedule: [],
+      obstacleSections: [],
+      obstacleQuietZones: [],
+      nextScheduledObstacleIndex: 0,
+      nextPickupIn: 0,
+    },
+    0.05,
+    random,
+  );
+}
+
+function getHighStumpFirstJumpCueWindow(
+  level: (typeof LEVELS)[number],
+  obstacle: ReturnType<typeof expandObstaclePattern>['obstacles'][number],
+): { startDistance: number; endDistance: number } | null {
+  const cueKey = `${obstacle.patternId}:first-jump`;
+  const hasFirstJumpCue = (distance: number): boolean => {
+    const cue = getObstacleCue(level, distance);
+    return cue?.key === cueKey && cue.kind === 'jump';
+  };
+  let firstCueDistance: number | null = null;
+  let lastCueDistance: number | null = null;
+
+  for (
+    let distance = Math.max(0, obstacle.contactDistance - 400);
+    distance < obstacle.contactDistance;
+    distance += 1
+  ) {
+    if (hasFirstJumpCue(distance)) {
+      firstCueDistance ??= distance;
+      lastCueDistance = distance;
+    }
+  }
+
+  if (firstCueDistance === null || lastCueDistance === null) {
+    return null;
+  }
+
+  let noCueDistance = firstCueDistance - 1;
+  let cueDistance = firstCueDistance;
+  while (cueDistance - noCueDistance > 1e-7) {
+    const middleDistance = (noCueDistance + cueDistance) / 2;
+    if (hasFirstJumpCue(middleDistance)) {
+      cueDistance = middleDistance;
+    } else {
+      noCueDistance = middleDistance;
+    }
+  }
+  const startDistance = cueDistance;
+
+  cueDistance = lastCueDistance;
+  noCueDistance = lastCueDistance + 1;
+  while (noCueDistance - cueDistance > 1e-7) {
+    const middleDistance = (cueDistance + noCueDistance) / 2;
+    if (hasFirstJumpCue(middleDistance)) {
+      cueDistance = middleDistance;
+    } else {
+      noCueDistance = middleDistance;
+    }
+  }
+
+  return { startDistance, endDistance: noCueDistance };
+}
+
+interface HighStumpCueSample {
+  state: GameState;
+  frameIndex: number;
+  frameDelta: number;
+}
+
+function observeHighStumpDoubleJumpCueSamples(
+  level: (typeof LEVELS)[number],
+  obstacle: ReturnType<typeof expandObstaclePattern>['obstacles'][number],
+  takeoffDistance: number,
+  frameDeltas: readonly number[],
+  initialFramePhaseSeconds = 0,
+): HighStumpCueSample[] {
+  let state = createIsolatedObstacleState(level, [obstacle], takeoffDistance);
+  state = applyPlayerAction(state, 'jump');
+  if (initialFramePhaseSeconds > 0) {
+    state = advanceGame(state, initialFramePhaseSeconds, () => 0.9);
+  }
+
+  const samples: HighStumpCueSample[] = [];
+  const cueKey = `${obstacle.patternId}:double-jump`;
+  let hasObservedCue = false;
+
+  for (
+    let frame = 0;
+    frame < 1_200 &&
+    state.distance < obstacle.contactDistance &&
+    state.status === 'running';
+    frame += 1
+  ) {
+    const cue = getObstacleCue(level, state.distance, state.player);
+    if (cue?.key === cueKey && cue.kind === 'doubleJump') {
+      hasObservedCue = true;
+      samples.push({
+        state,
+        frameIndex: frame,
+        frameDelta: frameDeltas[frame % frameDeltas.length]!,
+      });
+    } else if (hasObservedCue) {
+      break;
+    }
+
+    state = advanceGame(
+      state,
+      frameDeltas[frame % frameDeltas.length]!,
+      () => 0.9,
+    );
+  }
+
+  return samples;
+}
+
+function applySafeHighStumpDoubleJump(
+  level: (typeof LEVELS)[number],
+  obstacle: ReturnType<typeof expandObstaclePattern>['obstacles'][number],
+  sample: HighStumpCueSample,
+  context: string,
+): GameState {
+  const cue = getObstacleCue(level, sample.state.distance, sample.state.player);
+  expect(cue, context).toMatchObject({
+    key: `${obstacle.patternId}:double-jump`,
+    kind: 'doubleJump',
+  });
+  expect(sample.state.player.jumpHeight, context).toBeGreaterThan(0);
+  expect(sample.state.player.jumpsUsed, context).toBe(1);
+  expect(sample.state.distance, context).toBeLessThan(obstacle.contactDistance);
+
+  const jumped = applyPlayerAction(sample.state, 'jump');
+  expect(jumped.player.jumpsUsed, context).toBe(2);
+  expect(jumped.player.jumpHeight, context).toBeGreaterThan(0);
+
+  const speed = getRunSpeed(level, jumped.distance);
+  const clearDistance =
+    obstacle.contactDistance + obstacle.width + PLAYER_COLLISION_WIDTH;
+  const timeAtContact =
+    (obstacle.contactDistance - jumped.distance) / speed;
+  const timeAtClear = (clearDistance - jumped.distance) / speed;
+  const heightAtContact = getVerticalHeightAtTime(
+    jumped.player.jumpHeight,
+    jumped.player.jumpVelocity,
+    timeAtContact,
+  );
+  const heightAtClear = getVerticalHeightAtTime(
+    jumped.player.jumpHeight,
+    jumped.player.jumpVelocity,
+    timeAtClear,
+  );
+  const requiredClearance =
+    HIGH_STUMP_JUMP_CLEARANCE + HIGH_STUMP_CUE_MARGIN;
+
+  expect(heightAtContact, `${context}, height at contact`).toBeGreaterThan(
+    requiredClearance,
+  );
+  expect(heightAtClear, `${context}, height at clear`).toBeGreaterThan(
+    requiredClearance,
+  );
+
+  return jumped;
+}
+
+function expectHighStumpOverlapToStayClear(
+  initialState: GameState,
+  level: (typeof LEVELS)[number],
+  obstacle: ReturnType<typeof expandObstaclePattern>['obstacles'][number],
+  frameDeltas: readonly number[],
+  startingFrameIndex: number,
+  context: string,
+): void {
+  const clearDistance =
+    obstacle.contactDistance + obstacle.width + PLAYER_COLLISION_WIDTH;
+  const speed = getRunSpeed(level, initialState.distance);
+  let state = initialState;
+  let frameIndex = startingFrameIndex;
+  let observedOverlap = false;
+
+  for (
+    let frame = 0;
+    frame < 100 && state.distance < clearDistance;
+    frame += 1
+  ) {
+    const before = state;
+    state = advanceGame(
+      before,
+      frameDeltas[frameIndex % frameDeltas.length]!,
+      () => 0.9,
+    );
+    frameIndex += 1;
+
+    const overlapStartDistance = Math.max(
+      before.distance,
+      obstacle.contactDistance,
+    );
+    const overlapEndDistance = Math.min(state.distance, clearDistance);
+    if (overlapEndDistance > overlapStartDistance) {
+      observedOverlap = true;
+      for (const overlapDistance of [
+        overlapStartDistance,
+        overlapEndDistance,
+      ]) {
+        const overlapTime =
+          (overlapDistance - before.distance) / speed;
+        const overlapHeight = getVerticalHeightAtTime(
+          before.player.jumpHeight,
+          before.player.jumpVelocity,
+          overlapTime,
+        );
+        expect(
+          overlapHeight,
+          `${context}, overlap at distance ${overlapDistance}`,
+        ).toBeGreaterThan(
+          HIGH_STUMP_JUMP_CLEARANCE + HIGH_STUMP_CUE_MARGIN,
+        );
+      }
+    }
+  }
+
+  expect(observedOverlap, context).toBe(true);
+  expect(state.distance, context).toBeGreaterThanOrEqual(clearDistance);
+  expect(state.energy, context).toBeGreaterThan(95);
+  expect(state.status, context).toBe('running');
+}
+
+function advanceToHighStumpContactLead(
+  level: (typeof LEVELS)[number],
+  obstacle: ReturnType<typeof expandObstaclePattern>['obstacles'][number],
+  takeoffDistance: number,
+  contactLeadSeconds: number,
+  frameDeltas: readonly number[],
+): GameState {
+  let state = createIsolatedObstacleState(level, [obstacle], takeoffDistance);
+  state = applyPlayerAction(state, 'jump');
+  const speed = getRunSpeed(level, state.distance);
+  const targetDistance =
+    obstacle.contactDistance - speed * contactLeadSeconds;
+  let frame = 0;
+
+  while (state.distance < targetDistance - 1e-7) {
+    const frameDelta = frameDeltas[frame % frameDeltas.length]!;
+    const secondsToTarget = (targetDistance - state.distance) / speed;
+    state = advanceGame(
+      state,
+      Math.min(frameDelta, secondsToTarget),
+      () => 0.9,
+    );
+    frame += 1;
+  }
+
+  return state;
+}
+
+describe('20-stage runner data', () => {
+  it('contains twenty stages with increasing distance and pace', () => {
+    expect(LEVELS).toHaveLength(20);
 
     for (let index = 1; index < LEVELS.length; index += 1) {
       expect(LEVELS[index]!.distanceGoal).toBeGreaterThan(LEVELS[index - 1]!.distanceGoal);
@@ -99,6 +403,68 @@ describe('runner state', () => {
 
     expect(jumping.player.jumpVelocity).toBeGreaterThan(0);
     expect(applyPlayerAction(jumping, 'jump')).toBe(jumping);
+  });
+
+  it('accepts exactly one second jump after liftoff and never buffers an early press', () => {
+    const initial = createGameState(LEVELS[0]!);
+    const firstJump = applyPlayerAction(initial, 'jump');
+    const sameFramePress = applyPlayerAction(firstJump, 'jump');
+    const airborneWithoutBuffer = advanceGame(
+      sameFramePress,
+      0.001,
+      () => 0.9,
+    );
+
+    expect(firstJump.player.jumpsUsed).toBe(1);
+    expect(sameFramePress).toBe(firstJump);
+    expect(airborneWithoutBuffer.player.jumpHeight).toBeGreaterThan(0);
+    expect(airborneWithoutBuffer.player.jumpsUsed).toBe(1);
+
+    const doubleJump = applyPlayerAction(airborneWithoutBuffer, 'jump');
+    const thirdPress = applyPlayerAction(doubleJump, 'jump');
+
+    expect(doubleJump.player.jumpsUsed).toBe(2);
+    expect(doubleJump.player.jumpVelocity).toBe(DOUBLE_JUMP_IMPULSE);
+    expect(thirdPress).toBe(doubleJump);
+  });
+
+  it('restores both jumps only after the runner physically lands', () => {
+    const initial = createGameState(LEVELS[0]!);
+    let state = advanceGame(
+      applyPlayerAction(initial, 'jump'),
+      0.05,
+      () => 0.9,
+    );
+    state = applyPlayerAction(state, 'jump');
+
+    expect(state.player.jumpsUsed).toBe(2);
+
+    for (let frame = 0; frame < 30 && state.player.jumpHeight > 0; frame += 1) {
+      state = advanceGame(state, 0.05, () => 0.9);
+    }
+
+    expect(state.player.jumpHeight).toBe(0);
+    expect(state.player.jumpVelocity).toBe(0);
+    expect(state.player.jumpsUsed).toBe(0);
+    expect(applyPlayerAction(state, 'jump').player.jumpsUsed).toBe(1);
+  });
+
+  it('keeps jump and held-slide actions mutually exclusive in either jump phase', () => {
+    const initial = createGameState(LEVELS[0]!);
+    const heldOnGround = applyPlayerAction(initial, 'slideStart');
+
+    expect(applyPlayerAction(heldOnGround, 'jump')).toBe(heldOnGround);
+
+    const airborne = advanceGame(
+      applyPlayerAction(initial, 'jump'),
+      0.05,
+      () => 0.9,
+    );
+    const heldInAir = applyPlayerAction(airborne, 'slideStart');
+
+    expect(heldInAir.player.jumpHeight).toBeGreaterThan(0);
+    expect(applyPlayerAction(heldInAir, 'jump')).toBe(heldInAir);
+    expect(heldInAir.player.jumpsUsed).toBe(1);
   });
 
   it('keeps the runner sliding while the input is held, then allows a jump after release', () => {
@@ -233,7 +599,13 @@ describe('runner state', () => {
       ...initial,
       nextPickupIn: 5,
       nextScheduledObstacleIndex: initial.obstacleSchedule.length,
-      player: { jumpHeight: 92, jumpVelocity: 0, slideHeld: false, slideElapsed: 0 },
+      player: {
+        jumpHeight: 92,
+        jumpVelocity: 0,
+        jumpsUsed: 1,
+        slideHeld: false,
+        slideElapsed: 0,
+      },
       obstacles: [{ id: 11, type: 'stump' as const, x: 246, width: 58 }],
     };
     const cleared = advanceGame(state, 0.05, () => 0.9);
@@ -288,6 +660,335 @@ describe('runner state', () => {
     expectJumpAtCueToClearObstacle(level, obstacle, cueDistances.at(-1)!);
   });
 
+  it('requires two jumps in one airtime to clear the L2 tutorial pair', () => {
+    const level = LEVELS[1]!;
+    const pair = expandObstaclePattern(level).obstacles.filter(
+      (obstacle) =>
+        obstacle.patternRole === 'prelude' &&
+        obstacle.sequenceId === 'double-jump-tutorial',
+    );
+    const [first, second] = pair;
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+
+    const firstJumpCueDistances = getActionableJumpDistances(
+      level,
+      `${first!.patternId}:first`,
+      first!.contactDistance,
+    );
+    expect(firstJumpCueDistances.length).toBeGreaterThan(0);
+    const takeoffDistance =
+      firstJumpCueDistances[Math.floor(firstJumpCueDistances.length / 2)]!;
+
+    const simulatePair = (useDoubleJump: boolean) => {
+      let state = createIsolatedObstacleState(
+        level,
+        pair,
+        takeoffDistance,
+      );
+      expect(
+        getObstacleCue(level, state.distance, state.player),
+      ).toMatchObject({
+        key: `${first!.patternId}:first`,
+        kind: 'jump',
+      });
+      state = applyPlayerAction(state, 'jump');
+      let secondJumpAccepted = false;
+      const pairClearDistance = second!.contactDistance + second!.width + 59;
+      const firstClearDistance =
+        first!.contactDistance + first!.width + PLAYER_COLLISION_WIDTH;
+
+      for (
+        let frame = 0;
+        frame < 50 &&
+        state.distance <= pairClearDistance &&
+        state.status === 'running';
+        frame += 1
+      ) {
+        const cue = getObstacleCue(level, state.distance, state.player);
+        if (useDoubleJump && !secondJumpAccepted && cue?.kind === 'doubleJump') {
+          expect(state.player.jumpHeight).toBeGreaterThan(0);
+          expect(state.player.jumpsUsed).toBe(1);
+          expect(state.distance).toBeLessThan(firstClearDistance);
+          const jumped = applyPlayerAction(state, 'jump');
+          secondJumpAccepted =
+            jumped.player.jumpsUsed === 2 &&
+            jumped.player.jumpHeight > 0 &&
+            state.player.jumpHeight > 0;
+          expect(jumped.player.jumpHeight).toBeGreaterThan(0);
+          state = jumped;
+        }
+        state = advanceGame(state, SIMULATION_FRAME_SECONDS, () => 0.9);
+      }
+
+      return { state, secondJumpAccepted };
+    };
+
+    const singleJumpRun = simulatePair(false);
+    const doubleJumpRun = simulatePair(true);
+
+    expect(singleJumpRun.secondJumpAccepted).toBe(false);
+    expect(singleJumpRun.state.energy).toBeLessThan(80);
+    expect(doubleJumpRun.secondJumpAccepted).toBe(true);
+    expect(doubleJumpRun.state.energy).toBeGreaterThan(95);
+    expect(doubleJumpRun.state.status).toBe('running');
+  });
+
+  it('keeps the high-stump art, collision gate, and canvas clearance aligned', () => {
+    const firstHighStump = expandObstaclePattern(LEVELS[7]!).obstacles.find(
+      (obstacle) => obstacle.type === 'highStump',
+    )!;
+    const doubleJumpPeak =
+      JUMP_IMPULSE ** 2 / (2 * JUMP_GRAVITY) +
+      DOUBLE_JUMP_IMPULSE ** 2 / (2 * JUMP_GRAVITY);
+
+    expect(firstHighStump.width).toBe(42);
+    expect(OBSTACLE_WIDTHS.highStump).toBe(42);
+    expect(HIGH_STUMP_HEIGHT).toBe(160);
+    expect(HIGH_STUMP_JUMP_CLEARANCE).toBe(HIGH_STUMP_HEIGHT);
+    expect(GROUND_Y).toBe(334);
+    expect(WORLD_HEIGHT).toBe(420);
+    expect(doubleJumpPeak).toBeCloseTo(214, 0);
+    expect(
+      GROUND_Y - doubleJumpPeak - RUNNER_DRAW_BOUNDS.height,
+    ).toBeGreaterThan(0);
+  });
+
+  it('cannot clear a 160px high stump with the ordinary single jump', () => {
+    const designedLevel = LEVELS[7]!;
+    const level = {
+      ...designedLevel,
+      speedRamp: 0,
+    };
+    const scheduled = expandObstaclePattern(level).obstacles.find(
+      (obstacle) => obstacle.type === 'highStump',
+    )!;
+    const contactDistance = Math.round(
+      level.baseSpeed * (JUMP_IMPULSE / JUMP_GRAVITY),
+    );
+    const obstacle = { ...scheduled, contactDistance };
+    let state = createIsolatedObstacleState(level, [obstacle], 0);
+    state = applyPlayerAction(state, 'jump');
+    let highestSingleJump = 0;
+    const clearDistance =
+      obstacle.contactDistance + obstacle.width + 59;
+
+    for (
+      let frame = 0;
+      frame < 80 && state.distance <= clearDistance;
+      frame += 1
+    ) {
+      highestSingleJump = Math.max(
+        highestSingleJump,
+        state.player.jumpHeight,
+      );
+      state = advanceGame(state, SIMULATION_FRAME_SECONDS, () => 0.9);
+    }
+
+    expect(highestSingleJump).toBeLessThan(HIGH_STUMP_JUMP_CLEARANCE);
+    expect(state.energy).toBeLessThan(80);
+  });
+
+  it('keeps L8 high-stump cue edges safe across run speeds and RAF phases', () => {
+    const designedLevel = LEVELS[7]!;
+    const speedCases = [
+      { name: 'minimum', speed: designedLevel.baseSpeed },
+      {
+        name: 'maximum',
+        speed: designedLevel.baseSpeed + designedLevel.speedRamp,
+      },
+    ];
+    const frameSchedules = [
+      { name: '120 Hz', deltas: [1 / 120] },
+      { name: '60 Hz', deltas: [1 / 60] },
+      { name: '30 Hz', deltas: [1 / 30] },
+      { name: 'mixed RAF phases', deltas: [1 / 120, 1 / 60, 1 / 30] },
+    ] as const;
+    const phaseFractions = [0.15, 0.55, 0.9];
+
+    for (const { name: speedName, speed } of speedCases) {
+      const level = {
+        ...designedLevel,
+        baseSpeed: speed,
+        speedRamp: 0,
+      };
+      const obstacle = expandObstaclePattern(level).obstacles.find(
+        (scheduled) => scheduled.type === 'highStump',
+      )!;
+      const firstCueWindow = getHighStumpFirstJumpCueWindow(level, obstacle);
+      expect(firstCueWindow).not.toBeNull();
+      const { startDistance, endDistance } = firstCueWindow!;
+      const firstCueDuration = (endDistance - startDistance) / speed;
+      const firstCueStartState = createIsolatedObstacleState(
+        level,
+        [obstacle],
+        startDistance,
+      );
+      const firstCueEndState = createIsolatedObstacleState(
+        level,
+        [obstacle],
+        endDistance - 1e-6,
+      );
+
+      expect(firstCueDuration, `${speedName} first-jump cue`).toBeGreaterThanOrEqual(
+        0.15,
+      );
+      expect(
+        getObstacleCue(level, startDistance, firstCueStartState.player),
+      ).toMatchObject({
+        key: `${obstacle.patternId}:first-jump`,
+        kind: 'jump',
+      });
+      expect(
+        getObstacleCue(level, endDistance - 1e-6, firstCueEndState.player),
+      ).toMatchObject({
+        key: `${obstacle.patternId}:first-jump`,
+        kind: 'jump',
+      });
+      expect(
+        getObstacleCue(level, endDistance, firstCueEndState.player)?.key,
+      ).not.toBe(`${obstacle.patternId}:first-jump`);
+
+      const takeoffDistances = Array.from({ length: 9 }, (_, index) =>
+        Math.min(
+          startDistance + ((endDistance - startDistance) * index) / 8,
+          endDistance - 1e-6,
+        ),
+      );
+      for (const takeoffDistance of takeoffDistances) {
+        const firstCueState = createIsolatedObstacleState(
+          level,
+          [obstacle],
+          takeoffDistance,
+        );
+        expect(
+          getObstacleCue(level, takeoffDistance, firstCueState.player),
+        ).toMatchObject({
+          key: `${obstacle.patternId}:first-jump`,
+          kind: 'jump',
+        });
+
+        const continuousCueSamples = observeHighStumpDoubleJumpCueSamples(
+          level,
+          obstacle,
+          takeoffDistance,
+          [1 / 1_000],
+        );
+        const firstDoubleJumpCue = continuousCueSamples[0];
+        const lastDoubleJumpCue = continuousCueSamples.at(-1);
+        const context =
+          `speed=${speedName}(${speed}), takeoff=${takeoffDistance}, ` +
+          `first-jump lead=${(obstacle.contactDistance - takeoffDistance) / speed}s`;
+
+        expect(continuousCueSamples.length, context).toBeGreaterThan(0);
+        expect(
+          (lastDoubleJumpCue!.state.distance -
+            firstDoubleJumpCue!.state.distance) /
+            speed +
+            lastDoubleJumpCue!.frameDelta,
+          `${context}, double-jump cue interval`,
+        ).toBeGreaterThanOrEqual(0.15);
+
+        for (const cueEdge of [
+          firstDoubleJumpCue!,
+          lastDoubleJumpCue!,
+        ]) {
+          const jumped = applySafeHighStumpDoubleJump(
+            level,
+            obstacle,
+            cueEdge,
+            `${context}, 1 ms cue edge at ${cueEdge.state.distance}`,
+          );
+          expectHighStumpOverlapToStayClear(
+            jumped,
+            level,
+            obstacle,
+            [1 / 120],
+            cueEdge.frameIndex,
+            `${context}, 1 ms cue edge`,
+          );
+        }
+
+        const tooLateState = advanceToHighStumpContactLead(
+          level,
+          obstacle,
+          takeoffDistance,
+          0.06,
+          [1 / 120, 1 / 60, 1 / 30],
+        );
+        const tooLateCue = getObstacleCue(
+          level,
+          tooLateState.distance,
+          tooLateState.player,
+        );
+        expect(tooLateState.distance).toBeCloseTo(
+          obstacle.contactDistance - speed * 0.06,
+          6,
+        );
+        expect(tooLateState.player.jumpHeight).toBeGreaterThan(0);
+        expect(tooLateCue?.kind).not.toBe('doubleJump');
+
+        for (const schedule of frameSchedules) {
+          for (const phaseFraction of phaseFractions) {
+            const samples = observeHighStumpDoubleJumpCueSamples(
+              level,
+              obstacle,
+              takeoffDistance,
+              schedule.deltas,
+              schedule.deltas[0]! * phaseFraction,
+            );
+            const phaseContext =
+              `${context}, ${schedule.name}, phase=${phaseFraction}`;
+
+            expect(samples.length, phaseContext).toBeGreaterThan(0);
+            for (const cueSample of samples) {
+              applySafeHighStumpDoubleJump(
+                level,
+                obstacle,
+                cueSample,
+                `${phaseContext}, cue at ${cueSample.state.distance}`,
+              );
+            }
+
+            for (const cueEdge of [samples[0]!, samples.at(-1)!]) {
+              const jumped = applySafeHighStumpDoubleJump(
+                level,
+                obstacle,
+                cueEdge,
+                `${phaseContext}, input at ${cueEdge.state.distance}`,
+              );
+              expectHighStumpOverlapToStayClear(
+                jumped,
+                level,
+                obstacle,
+                schedule.deltas,
+                cueEdge.frameIndex,
+                `${phaseContext}, collision overlap`,
+              );
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it.each([
+    [0, 176],
+    [1, 56],
+    [2, 20],
+    [3, 56],
+  ])(
+    'spawns fruit height %i at its configured distance above ground',
+    (heightIndex, expectedGroundOffset) => {
+      const state = spawnPickupAtHeightIndex(heightIndex);
+      const pickup = state.pickups[0];
+
+      expect(pickup).toBeDefined();
+      expect(pickup?.y).toBe(GROUND_Y - expectedGroundOffset);
+      expect(pickup && GROUND_Y - pickup.y).toBe(expectedGroundOffset);
+    },
+  );
+
   it('collects a nearby energy fruit for score and run energy', () => {
     const initial = createGameState(LEVELS[0]!);
     const state = {
@@ -295,7 +996,7 @@ describe('runner state', () => {
       energy: 60,
       score: 150,
       nextPickupIn: 5,
-      pickups: [{ id: 12, x: PLAYER_CENTER_X + 12, y: 270 }],
+      pickups: [{ id: 12, x: PLAYER_CENTER_X + 12, y: GROUND_Y - 56 }],
     };
     const collected = advanceGame(state, 0.05, () => 0.9);
 
@@ -310,7 +1011,7 @@ describe('runner state', () => {
     const state = {
       ...initial,
       nextPickupIn: 5,
-      pickups: [{ id: 13, x: PLAYER_CENTER_X + 12, y: 150 }],
+      pickups: [{ id: 13, x: PLAYER_CENTER_X + 12, y: GROUND_Y - 176 }],
     };
     const standing = advanceGame(state, 0.05, () => 0.9);
     let jumping = applyPlayerAction(state, 'jump');
@@ -329,7 +1030,7 @@ describe('runner state', () => {
     const state = {
       ...initial,
       nextPickupIn: 5,
-      pickups: [{ id: 14, x: PLAYER_CENTER_X + 12, y: 306 }],
+      pickups: [{ id: 14, x: PLAYER_CENTER_X + 12, y: GROUND_Y - 20 }],
     };
     const sliding = advanceGame(applyPlayerAction(state, 'slideStart'), 0.05, () => 0.9);
 
@@ -344,7 +1045,7 @@ describe('runner state', () => {
       energy: 60,
       nextPickupIn: 5,
       obstacleSections: [],
-      pickups: [{ id: 15, x: PLAYER_CENTER_X + 12, y: 306 }],
+      pickups: [{ id: 15, x: PLAYER_CENTER_X + 12, y: GROUND_Y - 20 }],
     };
     const baseline = advanceGame({ ...state, pickups: [] }, 0.05, () => 0.9);
     const collected = advanceGame(state, 0.05, () => 0.9);
@@ -367,7 +1068,7 @@ describe('runner state', () => {
       nextPickupIn: 5,
       obstacleSections: [],
       player: { ...initial.player, jumpHeight: 7, jumpVelocity: 657 },
-      pickups: [{ id: pickupId, x: PLAYER_CENTER_X + 12, y: 306 }],
+      pickups: [{ id: pickupId, x: PLAYER_CENTER_X + 12, y: GROUND_Y - 16 }],
     };
     const collected = advanceGame(state, delta, () => 0.9);
     const reducedMotion = advanceGame(state, delta, () => 0.9, true);
@@ -422,6 +1123,58 @@ describe('runner state', () => {
 
     expect(state.pickups).toHaveLength(0);
   });
+
+  it.each(['start', 'end'] as const)(
+    'does not spawn a pickup just outside a quiet-zone %s boundary when its touch range overlaps',
+    (boundary) => {
+      const initial = createGameState(LEVELS[0]!);
+      const spawnState = {
+        ...initial,
+        obstacleSchedule: [],
+        obstacleSections: [],
+        obstacleQuietZones: [],
+        nextScheduledObstacleIndex: 0,
+        nextPickupIn: 0,
+      };
+      const preview = advanceGame(spawnState, 0.05, () => 0.9);
+      const previewPickup = preview.pickups[0]!;
+      const predictedPickupDistance =
+        preview.distance + previewPickup.x - PLAYER_CENTER_X;
+      const interactionHalfWidth =
+        Math.max(RUNNER_DRAW_BOUNDS.width, SLIDE_DRAW_BOUNDS.width) / 2 +
+        PICKUP_TOUCH_RADIUS;
+      const quietZone =
+        boundary === 'start'
+          ? {
+              startDistance: predictedPickupDistance + 1,
+              endDistance: predictedPickupDistance + 101,
+            }
+          : {
+              startDistance: predictedPickupDistance - 101,
+              endDistance: predictedPickupDistance - 1,
+            };
+
+      expect(
+        boundary === 'start'
+          ? predictedPickupDistance < quietZone.startDistance
+          : predictedPickupDistance >= quietZone.endDistance,
+      ).toBe(true);
+      expect(
+        predictedPickupDistance + interactionHalfWidth >=
+          quietZone.startDistance &&
+          predictedPickupDistance - interactionHalfWidth <
+            quietZone.endDistance,
+      ).toBe(true);
+
+      const state = advanceGame(
+        { ...spawnState, obstacleQuietZones: [quietZone] },
+        0.05,
+        () => 0.9,
+      );
+
+      expect(state.pickups).toHaveLength(0);
+    },
+  );
 
   it('finishes a level at its configured distance goal', () => {
     const initial = createGameState(LEVELS[0]!);

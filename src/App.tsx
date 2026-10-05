@@ -10,8 +10,11 @@ import {
 } from 'react';
 import CharacterPreview from './components/CharacterPreview';
 import GameCanvas from './components/GameCanvas';
+import GameMainLayout from './components/GameMainLayout';
 import {
   CUSTOM_GAME_TUNING,
+  getDoubleJumpStatus,
+  getRunSpeed,
   type GameSnapshot,
   type GameState,
   type PlayerAction,
@@ -42,6 +45,7 @@ const INITIAL_SNAPSHOT: GameSnapshot = {
   collectibles: 0,
   combo: 0,
   speed: LEVELS[0]!.baseSpeed,
+  doubleJumpStatus: 'recovered',
   cue: null,
 };
 
@@ -109,8 +113,9 @@ function getSnapshot(state: GameState): GameSnapshot {
     energy: state.energy,
     collectibles: state.collectibles,
     combo: state.combo,
-    speed: state.level.baseSpeed,
-    cue: getObstacleCue(state.level, state.distance),
+    speed: getRunSpeed(state.level, state.distance),
+    doubleJumpStatus: getDoubleJumpStatus(state.player),
+    cue: getObstacleCue(state.level, state.distance, state.player),
   };
 }
 
@@ -149,6 +154,18 @@ function App() {
   const activeLevel = getLevel(activeLevelId);
   const selectedLevel = getLevel(selectedLevelId);
   const isCleared = progress.clearedLevels.includes(activeLevel.id);
+  const doubleJumpStatusLabel =
+    snapshot.doubleJumpStatus === 'available'
+      ? '可用'
+      : snapshot.doubleJumpStatus === 'used'
+        ? '已用'
+        : '落地恢復';
+  const doubleJumpStatusCompactLabel =
+    snapshot.doubleJumpStatus === 'available'
+      ? '可用'
+      : snapshot.doubleJumpStatus === 'used'
+        ? '已用'
+        : '恢復';
 
   const sendAction = (action: PlayerAction, notifyGameCanvas = true): void => {
     if (action !== 'slideEnd' && screen !== 'playing') {
@@ -531,6 +548,9 @@ function App() {
   }, [screen, selectedLevelId]);
 
   const reachedAllStages = progress.clearedLevels.length === LEVELS.length;
+  const journeyProgressPercent = Math.floor(
+    (progress.clearedLevels.length / LEVELS.length) * 100,
+  );
 
   return (
     <main className="app-shell">
@@ -547,7 +567,7 @@ function App() {
             <div className="header-actions">
               <span className="header-progress">
                 <span className="header-progress-dot" />
-                {progress.clearedLevels.length} / 10 已通關
+                {progress.clearedLevels.length} / {LEVELS.length} 已通關
               </span>
               <a className="header-link" href="#level-map">
                 旅程地圖 <ArrowIcon />
@@ -568,7 +588,7 @@ function App() {
                   <span>衝刺日記</span>
                 </h1>
                 <p className="hero-description">
-                  跟著小跑者穿越十段各有風景的步道。跳過樹樁、滑過低門，
+                  跟著小跑者穿越 {LEVELS.length} 段各有風景的步道。跳過樹樁、滑過低門，
                   收集沿路的能量果實，朝下一個山丘出發。
                 </p>
                 <div className="hero-actions">
@@ -675,7 +695,7 @@ function App() {
               <div className="how-to-rule" />
               <div className="how-to-tip">
                 <span className="keycap">空白鍵 / ↑</span>
-                <span>跳過樹樁與裂隙</span>
+                <span>先跳躍；離地後再按一次，可完成二段跳</span>
               </div>
               <div className="how-to-tip">
                 <span className="keycap">↓ / S 按住</span>
@@ -695,14 +715,14 @@ function App() {
                     旅程地圖
                   </p>
                   <h2 ref={mapHeadingRef} tabIndex={-1}>
-                    十段步道，越跑越遠。
+                    {LEVELS.length} 段步道，越跑越遠。
                   </h2>
                 </div>
                 <div className="map-progress">
                   <span className="map-progress-label">旅程進度</span>
-                  <strong>{progress.clearedLevels.length}<small> / 10</small></strong>
+                  <strong>{progress.clearedLevels.length}<small> / {LEVELS.length}</small></strong>
                   <div className="map-progress-track">
-                    <span style={{ width: `${progress.clearedLevels.length * 10}%` }} />
+                    <span style={{ width: `${journeyProgressPercent}%` }} />
                   </div>
                 </div>
               </div>
@@ -710,7 +730,7 @@ function App() {
               {reachedAllStages && (
                 <div className="all-clear-banner">
                   <span>✦</span>
-                  十段步道都已完成，謝謝你陪小跑者跑到星光站！
+                  {LEVELS.length} 段步道都已完成，謝謝你陪小跑者跑到星光站！
                 </div>
               )}
 
@@ -833,56 +853,14 @@ function App() {
             </div>
 
             <div className="game-layout">
-              <section
-                className="game-main"
-                aria-label="遊戲區"
-                ref={gameRegionRef}
-                tabIndex={-1}
+              <GameMainLayout
+                snapshot={snapshot}
+                doubleJumpStatusLabel={doubleJumpStatusLabel}
+                doubleJumpStatusCompactLabel={doubleJumpStatusCompactLabel}
+                formatNumber={formatNumber}
+                formatMeters={formatMeters}
+                regionRef={gameRegionRef}
               >
-                <div className="hud-grid">
-                  <div className="hud-card hud-score">
-                    <span className="hud-label">星光分數</span>
-                    <strong>{formatNumber(snapshot.score)}</strong>
-                    <span className="hud-symbol score-symbol">✦</span>
-                  </div>
-                  <div className="hud-card hud-energy">
-                    <div className="energy-heading">
-                      <span className="hud-label">體力</span>
-                      <strong>{Math.round(snapshot.energy)}%</strong>
-                    </div>
-                    <div
-                      className="energy-track"
-                      role="progressbar"
-                      aria-label="剩餘體力"
-                      aria-valuenow={Math.round(snapshot.energy)}
-                      aria-valuemin={0}
-                      aria-valuemax={CUSTOM_GAME_TUNING.startingEnergy}
-                    >
-                      <span style={{ width: `${Math.max(0, Math.min(100, snapshot.energy))}%` }} />
-                    </div>
-                    <span className="hud-symbol energy-symbol">✦</span>
-                  </div>
-                </div>
-
-                <div className="distance-row">
-                  <div>
-                    <span>步道進度</span>
-                    <strong>{formatMeters(snapshot.distance)} <i>/</i> {formatMeters(snapshot.goalDistance)}</strong>
-                  </div>
-                  <strong className="progress-percent">{Math.floor(snapshot.progress * 100)}%</strong>
-                </div>
-                <div
-                  className="run-progress-track"
-                  role="progressbar"
-                  aria-label="關卡路程進度"
-                  aria-valuenow={Math.floor(snapshot.progress * 100)}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                >
-                  <span style={{ width: `${Math.max(0, Math.min(100, snapshot.progress * 100))}%` }} />
-                  <i />
-                </div>
-
                 <div className={`game-scene${screen === 'paused' || screen === 'result' ? ' game-scene-muted' : ''}`}>
                   <GameCanvas
                     level={activeLevel}
@@ -946,7 +924,7 @@ function App() {
                           {outcome === 'won'
                             ? activeLevel.id < LEVELS.length
                               ? `下一段「${getLevel(activeLevel.id + 1).name}」已經解鎖。`
-                              : '十段步道全數完成，小跑者抵達星光站！'
+                              : `${LEVELS.length} 段步道全數完成，小跑者抵達星光站！`
                             : '體力已耗盡；收集能量果實補充體力，再試著跑得更遠。'}
                         </p>
                         <div className="result-summary">
@@ -1045,7 +1023,7 @@ function App() {
                 <p className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">
                   {slideAnnouncement}
                 </p>
-              </section>
+              </GameMainLayout>
 
               <aside className="mission-panel">
                 <div className="mission-card">
@@ -1071,6 +1049,11 @@ function App() {
                     <span className="guide-visual guide-stump">▰</span>
                     <span><strong>樹樁 / 裂隙</strong><small>按跳躍越過</small></span>
                     <kbd>↑</kbd>
+                  </div>
+                  <div className="guide-row">
+                    <span className="guide-visual guide-stump">▰</span>
+                    <span><strong>緊接樹樁 / 高樹樁</strong><small>先離地，再按一次二段跳</small></span>
+                    <kbd>↑ ×2</kbd>
                   </div>
                   <div className="guide-row">
                     <span className="guide-visual guide-arch">⌒</span>
