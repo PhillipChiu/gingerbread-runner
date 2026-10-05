@@ -10,6 +10,7 @@ import {
 } from 'react';
 import CharacterPreview from './components/CharacterPreview';
 import GameCanvas from './components/GameCanvas';
+import GameMainLayout from './components/GameMainLayout';
 import {
   CUSTOM_GAME_TUNING,
   getDoubleJumpStatus,
@@ -159,6 +160,12 @@ function App() {
       : snapshot.doubleJumpStatus === 'used'
         ? '已用'
         : '落地恢復';
+  const doubleJumpStatusCompactLabel =
+    snapshot.doubleJumpStatus === 'available'
+      ? '可用'
+      : snapshot.doubleJumpStatus === 'used'
+        ? '已用'
+        : '恢復';
 
   const sendAction = (action: PlayerAction, notifyGameCanvas = true): void => {
     if (action !== 'slideEnd' && screen !== 'playing') {
@@ -846,68 +853,14 @@ function App() {
             </div>
 
             <div className="game-layout">
-              <section
-                className="game-main"
-                aria-label="遊戲區"
-                ref={gameRegionRef}
-                tabIndex={-1}
+              <GameMainLayout
+                snapshot={snapshot}
+                doubleJumpStatusLabel={doubleJumpStatusLabel}
+                doubleJumpStatusCompactLabel={doubleJumpStatusCompactLabel}
+                formatNumber={formatNumber}
+                formatMeters={formatMeters}
+                regionRef={gameRegionRef}
               >
-                <div className="hud-grid">
-                  <div className="hud-card hud-score">
-                    <span className="hud-label">星光分數</span>
-                    <strong>{formatNumber(snapshot.score)}</strong>
-                    <span className="hud-symbol score-symbol">✦</span>
-                  </div>
-                  <div className="hud-card hud-energy">
-                    <div className="energy-heading">
-                      <span className="hud-label">體力</span>
-                      <strong>{Math.round(snapshot.energy)}%</strong>
-                    </div>
-                    <div
-                      className="energy-track"
-                      role="progressbar"
-                      aria-label="剩餘體力"
-                      aria-valuenow={Math.round(snapshot.energy)}
-                      aria-valuemin={0}
-                      aria-valuemax={CUSTOM_GAME_TUNING.startingEnergy}
-                    >
-                      <span style={{ width: `${Math.max(0, Math.min(100, snapshot.energy))}%` }} />
-                    </div>
-                    <span className="hud-symbol energy-symbol">✦</span>
-                  </div>
-                </div>
-
-                <div className="distance-row">
-                  <div>
-                    <span>步道進度</span>
-                    <strong>{formatMeters(snapshot.distance)} <i>/</i> {formatMeters(snapshot.goalDistance)}</strong>
-                  </div>
-                  <strong className="progress-percent">{Math.floor(snapshot.progress * 100)}%</strong>
-                </div>
-                <div
-                  className="run-progress-track"
-                  role="progressbar"
-                  aria-label="關卡路程進度"
-                  aria-valuenow={Math.floor(snapshot.progress * 100)}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                >
-                  <span style={{ width: `${Math.max(0, Math.min(100, snapshot.progress * 100))}%` }} />
-                  <i />
-                </div>
-
-                <div
-                  className={`double-jump-status-card double-jump-status-${snapshot.doubleJumpStatus}`}
-                  role="group"
-                  aria-label={`二段跳狀態：${doubleJumpStatusLabel}`}
-                >
-                  <span className="double-jump-status-title">二段跳</span>
-                  <strong className="double-jump-status-value">
-                    <i aria-hidden="true" />
-                    {doubleJumpStatusLabel}
-                  </strong>
-                </div>
-
                 <div className={`game-scene${screen === 'paused' || screen === 'result' ? ' game-scene-muted' : ''}`}>
                   <GameCanvas
                     level={activeLevel}
@@ -1070,7 +1023,7 @@ function App() {
                 <p className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">
                   {slideAnnouncement}
                 </p>
-              </section>
+              </GameMainLayout>
 
               <aside className="mission-panel">
                 <div className="mission-card">

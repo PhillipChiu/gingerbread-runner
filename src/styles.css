@@ -1231,7 +1231,7 @@ kbd {
 
 .hud-grid {
   display: grid;
-  grid-template-columns: 0.85fr 1.15fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 9px;
 }
 
@@ -1372,13 +1372,13 @@ kbd {
 }
 
 .double-jump-status-card {
-  min-height: 42px;
+  min-height: 66px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-top: 9px;
-  padding: 7px 12px;
+  margin: 0;
+  padding: 10px 13px;
   border: 1px solid rgba(215, 228, 143, 0.22);
   border-radius: 7px;
   color: #e8ecd9;
@@ -1397,7 +1397,11 @@ kbd {
   gap: 7px;
   color: var(--lime);
   font-size: 11px;
-  white-space: nowrap;
+  white-space: normal;
+}
+
+.double-jump-status-compact {
+  display: none;
 }
 
 .double-jump-status-value i {
@@ -2269,8 +2273,21 @@ kbd {
   }
 
   .hud-grid {
-    grid-template-columns: 0.86fr 1.14fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 5px;
+  }
+
+  .double-jump-status-card {
+    flex-wrap: wrap;
+    gap: 3px;
+  }
+
+  .double-jump-status-full {
+    display: none;
+  }
+
+  .double-jump-status-compact {
+    display: inline;
   }
 
   .hud-card {
@@ -3247,7 +3264,7 @@ kbd,
   .game-main {
     display: grid;
     grid-template-columns: minmax(48px, 56px) minmax(0, 1fr) minmax(48px, 56px);
-    grid-template-rows: auto auto auto auto auto;
+    grid-template-rows: auto auto auto auto;
     align-items: center;
     gap: 2px 6px;
     padding: 6px;
@@ -3256,8 +3273,23 @@ kbd,
   .hud-grid {
     grid-column: 1 / -1;
     grid-row: 1;
-    grid-template-columns: 0.9fr 1.1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 6px;
+  }
+
+  .hud-grid > .double-jump-status-card {
+    min-width: 0;
+    min-height: 34px;
+    gap: 4px;
+    padding: 3px 6px;
+  }
+
+  .double-jump-status-full {
+    display: none;
+  }
+
+  .double-jump-status-compact {
+    display: inline;
   }
 
   .hud-card {
@@ -3318,23 +3350,16 @@ kbd,
     height: 3px;
   }
 
-  .double-jump-status-card {
-    grid-column: 2;
-    grid-row: 4;
-    min-height: 26px;
-    gap: 6px;
-    margin: 0;
-    padding: 3px 8px;
-    border-radius: 6px;
-  }
-
   .double-jump-status-title,
   .double-jump-status-value {
     font-size: 10px;
   }
 
   .double-jump-status-value {
+    min-width: 0;
     gap: 5px;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .double-jump-status-value i {
@@ -3344,7 +3369,7 @@ kbd,
 
   .game-scene {
     grid-column: 2;
-    grid-row: 5;
+    grid-row: 4;
     min-width: 0;
     margin: 0;
     border-radius: 8px;
@@ -3353,7 +3378,7 @@ kbd,
   .game-controls {
     position: static;
     grid-column: 1 / -1;
-    grid-row: 5;
+    grid-row: 4;
     display: grid;
     grid-template-columns: inherit;
     align-self: stretch;
@@ -3658,8 +3683,13 @@ kbd,
   }
 
   .game-controls .control-hint > span:last-child {
+    display: -webkit-box;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
   }
 }

@@ -32,9 +32,11 @@ export const SECTION_PREVIEW_LEAD_DISTANCE = 650;
 export const MIN_RECOVERY_CUE_DISTANCE = 300;
 export const SAFE_FINISH_DISTANCE = 650;
 const DOUBLE_JUMP_CUE_MARGIN = 6;
-const HIGH_STUMP_CUE_MARGIN = 2;
-const FIRST_JUMP_CUE_EARLY_TOLERANCE_SECONDS = 0.05;
-const FIRST_JUMP_CUE_LATE_TOLERANCE_SECONDS = 0.08;
+export const HIGH_STUMP_CUE_MARGIN = 2;
+export const HIGH_STUMP_DOUBLE_JUMP_MIN_CONTACT_LEAD_SECONDS = 0.08;
+const MIN_HIGH_STUMP_DOUBLE_JUMP_CUE_SECONDS = 0.15;
+const FIRST_JUMP_CUE_EARLY_TOLERANCE_SECONDS = 0.095;
+const FIRST_JUMP_CUE_LATE_TOLERANCE_SECONDS = 0.06;
 const SEQUENCE_PREVIEW_LEAD_DISTANCE = 300;
 
 export type ObstaclePatternRole = 'prelude' | 'arch' | 'followup';
@@ -480,17 +482,23 @@ function getHighStumpFirstJumpWindow(
 
   const obstacleTraversalSeconds =
     (obstacle.width + OBSTACLE_COLLISION_CLEARANCE) / speed;
+  const earliestSecondJumpSeconds = Math.max(
+    secondJumpWindow.ascentSeconds,
+    HIGH_STUMP_DOUBLE_JUMP_MIN_CONTACT_LEAD_SECONDS,
+  );
+  const latestSecondJumpSeconds =
+    secondJumpWindow.descentSeconds - obstacleTraversalSeconds;
   const usableSecondJumpSeconds =
-    secondJumpWindow.descentSeconds - secondJumpWindow.ascentSeconds;
-  if (usableSecondJumpSeconds <= obstacleTraversalSeconds) {
+    latestSecondJumpSeconds - earliestSecondJumpSeconds;
+  if (
+    usableSecondJumpSeconds <
+    MIN_HIGH_STUMP_DOUBLE_JUMP_CUE_SECONDS
+  ) {
     return null;
   }
 
   const secondJumpToContactSeconds =
-    (secondJumpWindow.ascentSeconds +
-      secondJumpWindow.descentSeconds -
-      obstacleTraversalSeconds) /
-    2;
+    (earliestSecondJumpSeconds + latestSecondJumpSeconds) / 2;
   const secondJumpDistance =
     obstacle.contactDistance - speed * secondJumpToContactSeconds;
   const targetFirstJumpDistance =
@@ -824,9 +832,12 @@ function getHighStumpCue(
         startDistance:
           obstacleClearDistance -
           speed * secondJumpWindow.descentSeconds,
-        endDistance:
+        endDistance: Math.min(
           obstacle.contactDistance -
-          speed * secondJumpWindow.ascentSeconds,
+            speed * secondJumpWindow.ascentSeconds,
+          obstacle.contactDistance -
+            speed * HIGH_STUMP_DOUBLE_JUMP_MIN_CONTACT_LEAD_SECONDS,
+        ),
       };
       if (
         !player.slideHeld &&

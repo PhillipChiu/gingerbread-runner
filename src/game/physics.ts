@@ -2,7 +2,7 @@ import type { LevelConfig } from './levels';
 
 export const JUMP_GRAVITY = 1_650;
 export const JUMP_IMPULSE = 675;
-export const DOUBLE_JUMP_IMPULSE = 470;
+export const DOUBLE_JUMP_IMPULSE = 500;
 export const STUMP_JUMP_CLEARANCE = 40;
 export const GAP_JUMP_CLEARANCE = 58;
 export const HIGH_STUMP_HEIGHT = 160;

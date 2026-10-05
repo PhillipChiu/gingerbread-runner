@@ -4,6 +4,8 @@ import {
   createGameState,
   getRunSpeed,
   GROUND_Y,
+  PICKUP_BOB_AMPLITUDE,
+  PICKUP_BOB_ANGULAR_SPEED,
   PICKUP_TOUCH_RADIUS,
   PLAYER_CENTER_X,
   type GameState,
@@ -124,4 +126,50 @@ describe('fallback runner pickup bounds', () => {
       expect(separated.pickups).toHaveLength(1);
     },
   );
+});
+
+describe('bobbing energy fruit rendering', () => {
+  it('draws the fruit glow and body at the collision bob position', () => {
+    const initial = createGameState(LEVELS[0]!);
+    const pickup = { id: 1, x: 913, y: GROUND_Y - 16 };
+    const elapsed =
+      (Math.PI * 1.5 - pickup.id) / PICKUP_BOB_ANGULAR_SPEED;
+    const expectedY = pickup.y - PICKUP_BOB_AMPLITUDE;
+    const radialGradientCenters: number[] = [];
+    const fruitArcCenters: number[] = [];
+    const gradient: CanvasGradient = {
+      addColorStop: (_offset: number, _color: string) => {},
+    };
+    const context = new Proxy(
+      {
+        createLinearGradient: () => gradient,
+        createRadialGradient: (x: number, y: number) => {
+          if (x === pickup.x) {
+            radialGradientCenters.push(y);
+          }
+          return gradient;
+        },
+        arc: (x: number, y: number) => {
+          if (x === pickup.x) {
+            fruitArcCenters.push(y);
+          }
+        },
+      } as unknown as CanvasRenderingContext2D,
+      {
+        get(target, property, receiver) {
+          return Reflect.get(target, property, receiver) ?? (() => {});
+        },
+        set(target, property, value, receiver) {
+          return Reflect.set(target, property, value, receiver);
+        },
+      },
+    );
+    const state: GameState = { ...initial, elapsed, pickups: [pickup] };
+
+    drawGameScene(context, state, { run: [], slide: [] });
+
+    expect(radialGradientCenters).toContain(expectedY);
+    expect(fruitArcCenters.length).toBeGreaterThan(0);
+    expect(fruitArcCenters.every((y) => y === expectedY)).toBe(true);
+  });
 });
