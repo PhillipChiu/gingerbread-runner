@@ -11,6 +11,8 @@ import {
   type GameState,
 } from './engine';
 import { LEVELS } from './levels';
+import { OBSTACLE_WIDTHS } from './obstaclePattern';
+import { ARCH_HEIGHT } from './physics';
 import { drawGameScene } from './render';
 import {
   RUNNER_DRAW_BOUNDS,
@@ -171,5 +173,111 @@ describe('bobbing energy fruit rendering', () => {
     expect(radialGradientCenters).toContain(expectedY);
     expect(fruitArcCenters.length).toBeGreaterThan(0);
     expect(fruitArcCenters.every((y) => y === expectedY)).toBe(true);
+  });
+});
+
+interface RecordedCall {
+  name: string;
+  args: number[];
+}
+
+function recordSceneCalls(state: GameState): RecordedCall[] {
+  const calls: RecordedCall[] = [];
+  const gradient: CanvasGradient = {
+    addColorStop: (_offset: number, _color: string) => {},
+  };
+  const context = new Proxy(
+    {
+      createLinearGradient: () => gradient,
+      createRadialGradient: () => gradient,
+    } as unknown as CanvasRenderingContext2D,
+    {
+      get(target, property, receiver) {
+        if (Reflect.has(target, property)) {
+          return Reflect.get(target, property, receiver);
+        }
+
+        return (...args: number[]) => {
+          calls.push({ name: String(property), args });
+        };
+      },
+      set(target, property, value, receiver) {
+        return Reflect.set(target, property, value, receiver);
+      },
+    },
+  );
+
+  drawGameScene(context, state, { run: [], slide: [] }, true);
+  return calls;
+}
+
+function isSameCall(first: RecordedCall, second: RecordedCall): boolean {
+  return (
+    first.name === second.name &&
+    JSON.stringify(first.args) === JSON.stringify(second.args)
+  );
+}
+
+/** The calls `after` made on top of `before`, found by trimming the shared head and tail. */
+function getInsertedCalls(
+  before: RecordedCall[],
+  after: RecordedCall[],
+): RecordedCall[] {
+  let head = 0;
+  while (head < before.length && isSameCall(before[head]!, after[head]!)) {
+    head += 1;
+  }
+
+  let tail = 0;
+  while (
+    tail < before.length - head &&
+    isSameCall(
+      before[before.length - 1 - tail]!,
+      after[after.length - 1 - tail]!,
+    )
+  ) {
+    tail += 1;
+  }
+
+  return after.slice(head, after.length - tail);
+}
+
+function getDrawnYs(calls: RecordedCall[]): number[] {
+  return calls.flatMap(({ name, args }) => {
+    if (name === 'moveTo' || name === 'lineTo') {
+      return [args[1]!];
+    }
+    if (name === 'arcTo') {
+      return [args[1]!, args[3]!];
+    }
+    if (name === 'arc') {
+      return [args[1]! - args[2]!, args[1]! + args[2]!];
+    }
+    if (name === 'rect' || name === 'fillRect') {
+      return [args[1]!, args[1]! + args[3]!];
+    }
+
+    return [];
+  });
+}
+
+describe('ground gate rendering', () => {
+  it('draws the gate from the ground up to the shared collision height', () => {
+    const initial = createGameState(LEVELS[0]!);
+    const gate = {
+      id: 1,
+      type: 'arch' as const,
+      x: 700,
+      width: OBSTACLE_WIDTHS.arch,
+    };
+    const gateCalls = getInsertedCalls(
+      recordSceneCalls({ ...initial, obstacles: [] }),
+      recordSceneCalls({ ...initial, obstacles: [gate] }),
+    );
+    const drawnYs = getDrawnYs(gateCalls);
+
+    expect(drawnYs.length).toBeGreaterThan(0);
+    expect(Math.min(...drawnYs)).toBe(GROUND_Y - ARCH_HEIGHT);
+    expect(Math.max(...drawnYs)).toBe(GROUND_Y);
   });
 });

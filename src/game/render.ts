@@ -18,7 +18,7 @@ import {
   SLIDE_DRAW_BOUNDS,
 } from './runnerAnimation';
 import type { RunnerSpriteFrames } from './sprites';
-import { HIGH_STUMP_HEIGHT } from './physics';
+import { ARCH_HEIGHT, HIGH_STUMP_HEIGHT } from './physics';
 
 function drawCloud(
   context: CanvasRenderingContext2D,
@@ -221,22 +221,44 @@ function drawHighStump(
 function drawArch(context: CanvasRenderingContext2D, obstacle: Obstacle): void {
   const { x, width } = obstacle;
   const postWidth = 13;
+  const postInset = 7;
+  const railHeight = 23;
+  const topRailY = GROUND_Y - ARCH_HEIGHT;
+  const lowerRailY = GROUND_Y - 81;
+  const leftPostX = x + postInset;
+  const rightPostX = x + width - postWidth - postInset;
+
+  // The posts reach the top rail; the lower rail keeps the 58px slide opening.
   context.fillStyle = '#855c57';
-  roundedRect(context, x + 7, GROUND_Y - 66, postWidth, 66, 5);
+  roundedRect(context, leftPostX, topRailY + 8, postWidth, ARCH_HEIGHT - 8, 5);
   context.fill();
-  roundedRect(context, x + width - postWidth - 7, GROUND_Y - 66, postWidth, 66, 5);
+  roundedRect(context, rightPostX, topRailY + 8, postWidth, ARCH_HEIGHT - 8, 5);
   context.fill();
 
-  context.fillStyle = '#f3e5c4';
-  roundedRect(context, x, GROUND_Y - 81, width, 23, 10);
+  // Solid panel between the rails: the part a single jump cannot get over.
+  context.fillStyle = '#a2705f';
+  roundedRect(
+    context,
+    leftPostX + postWidth - 3,
+    topRailY + railHeight - 6,
+    rightPostX - leftPostX - postWidth + 6,
+    lowerRailY - topRailY - railHeight + 12,
+    4,
+  );
   context.fill();
-  context.fillStyle = '#df8a71';
-  roundedRect(context, x + 5, GROUND_Y - 78, width - 10, 11, 6);
-  context.fill();
+
+  for (const railY of [lowerRailY, topRailY]) {
+    context.fillStyle = '#f3e5c4';
+    roundedRect(context, x, railY, width, railHeight, 10);
+    context.fill();
+    context.fillStyle = '#df8a71';
+    roundedRect(context, x + 5, railY + 3, width - 10, 11, 6);
+    context.fill();
+  }
 
   context.fillStyle = 'rgba(255,249,221,0.9)';
   context.beginPath();
-  context.arc(x + width / 2, GROUND_Y - 47, 5, 0, Math.PI * 2);
+  context.arc(x + width / 2, (topRailY + railHeight + lowerRailY) / 2, 5, 0, Math.PI * 2);
   context.fill();
 }
 
