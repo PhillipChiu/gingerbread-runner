@@ -11,6 +11,8 @@ import {
 import CharacterPreview from './components/CharacterPreview';
 import GameCanvas from './components/GameCanvas';
 import GameMainLayout from './components/GameMainLayout';
+import SoundNotice from './components/SoundNotice';
+import SoundToggle from './components/SoundToggle';
 import {
   CUSTOM_GAME_TUNING,
   getDoubleJumpStatus,
@@ -33,6 +35,7 @@ import {
   type ProgressData,
 } from './game/progress';
 import { isInteractiveKeyboardTarget } from './game/keyboard';
+import { useBackgroundMusic } from './game/useBackgroundMusic';
 
 type Screen = 'menu' | 'playing' | 'paused' | 'result';
 
@@ -126,6 +129,7 @@ function App() {
   const [selectedLevelId, setSelectedLevelId] = useState(progress.unlockedLevel);
   const [activeLevelId, setActiveLevelId] = useState(1);
   const [screen, setScreen] = useState<Screen>('menu');
+  const backgroundMusic = useBackgroundMusic(screen);
   const [runKey, setRunKey] = useState(0);
   const [snapshot, setSnapshot] = useState<GameSnapshot>(INITIAL_SNAPSHOT);
   const [actionQueue] = useState(() => new OrderedPlayerActionQueue());
@@ -380,6 +384,9 @@ function App() {
       return;
     }
 
+    // Must stay synchronous inside the click/keydown that starts the run so the
+    // browser treats play() as user-initiated; effects only pause and resume.
+    backgroundMusic.startRun();
     releaseAllSlideSources();
     setActiveLevelId(level.id);
     setSelectedLevelId(level.id);
@@ -399,6 +406,24 @@ function App() {
     releaseAllSlideSources();
     setScreen('menu');
     setOutcome(null);
+  };
+
+  const handleSoundToggle = (
+    nextEnabled: boolean,
+    viaPointer: boolean,
+  ): void => {
+    backgroundMusic.setEnabled(nextEnabled);
+    if (viaPointer && screen === 'playing') {
+      // A clicked button keeps focus, which would turn Space/Enter into
+      // "toggle music" instead of jump for the rest of the run.
+      gameRegionRef.current?.focus({ preventScroll: true });
+    }
+  };
+
+  const handleSoundRetry = (): void => {
+    backgroundMusic.retry();
+    // The retry button leaves the page once the notice clears.
+    gameRegionRef.current?.focus({ preventScroll: true });
   };
 
   const togglePause = (): void => {
@@ -601,9 +626,15 @@ function App() {
                     開始第 {String(selectedLevelId).padStart(2, '0')} 關
                     <ArrowIcon />
                   </button>
-                  <a className="text-link" href="#level-map">
-                    選擇步道 <ArrowIcon />
-                  </a>
+                  <div className="hero-secondary-actions">
+                    <a className="text-link" href="#level-map">
+                      選擇步道 <ArrowIcon />
+                    </a>
+                    <SoundToggle
+                      enabled={backgroundMusic.enabled}
+                      onToggle={handleSoundToggle}
+                    />
+                  </div>
                 </div>
                 <label className="accessible-hints-toggle">
                   <input
@@ -823,6 +854,10 @@ function App() {
               <span>本關最佳</span>
               <strong>{formatNumber(progress.bestScores[activeLevel.id] ?? 0)}</strong>
             </div>
+            <SoundToggle
+              enabled={backgroundMusic.enabled}
+              onToggle={handleSoundToggle}
+            />
             {screen === 'result' ? (
               <span className={`game-status-tag ${outcome === 'won' ? 'status-success' : 'status-failure'}`}>
                 {outcome === 'won' ? '步道完成' : '本次結束'}
@@ -841,6 +876,10 @@ function App() {
           </header>
 
           <div className="game-page-container">
+            <SoundNotice
+              issue={backgroundMusic.issue}
+              onRetry={handleSoundRetry}
+            />
             <div className="game-intro-row">
               <div>
                 <p className="eyebrow">
@@ -897,6 +936,11 @@ function App() {
                         <button className="overlay-text-button" type="button" onClick={() => startLevel(activeLevel.id)}>
                           重新開始本關
                         </button>
+                        <SoundToggle
+                          className="sound-toggle-dialog"
+                          enabled={backgroundMusic.enabled}
+                          onToggle={handleSoundToggle}
+                        />
                       </div>
                     </div>
                   )}
@@ -958,6 +1002,11 @@ function App() {
                           <button className="overlay-text-button" type="button" onClick={returnToMenu}>
                             回到旅程地圖
                           </button>
+                          <SoundToggle
+                            className="sound-toggle-dialog"
+                            enabled={backgroundMusic.enabled}
+                            onToggle={handleSoundToggle}
+                          />
                         </div>
                       </div>
                     </div>

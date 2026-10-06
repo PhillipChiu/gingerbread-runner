@@ -1,7 +1,8 @@
 /// <reference types="node" />
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import App from './App';
 import GameMainLayout from './components/GameMainLayout';
 import type { GameSnapshot } from './game/engine';
 
@@ -189,5 +190,51 @@ describe('mobile landscape game HUD', () => {
       ),
     ).toContain('grid-column: 2;');
     expect(controlHintText).not.toMatch(/white-space:\s*nowrap/);
+  });
+});
+
+describe('background music controls', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('shows the sound toggle on the menu, on by default, without creating audio', () => {
+    let audioElementsCreated = 0;
+    vi.stubGlobal('Audio', function () {
+      audioElementsCreated += 1;
+    });
+
+    const markup = renderToStaticMarkup(<App />);
+
+    expect(markup).toContain(
+      '<button class="sound-toggle" type="button" aria-label="背景音樂" aria-pressed="true">',
+    );
+    expect(markup).not.toContain('data-issue');
+    expect(markup).not.toContain('<audio');
+    expect(audioElementsCreated).toBe(0);
+  });
+
+  it('gives the sound controls touch-sized targets', () => {
+    for (const selector of ['.sound-toggle', '.sound-notice-retry']) {
+      const declarations = getRuleDeclarations(stylesheet, selector);
+
+      expect(declarations, selector).toMatch(/min-height:\s*48px;/);
+      expect(declarations, selector).toMatch(/min-width:\s*48px;/);
+    }
+  });
+
+  it('keeps the sound controls in normal flow so they cannot cover the jump and slide buttons', () => {
+    for (const selector of [
+      '.hero-secondary-actions',
+      '.sound-toggle',
+      '.sound-toggle-dialog',
+      '.sound-notice',
+      '.sound-notice-retry',
+    ]) {
+      const declarations = getRuleDeclarations(stylesheet, selector);
+
+      expect(declarations, selector).toBeDefined();
+      expect(declarations, selector).not.toMatch(/position\s*:/);
+    }
   });
 });

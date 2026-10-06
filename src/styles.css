@@ -3693,3 +3693,133 @@ kbd,
     -webkit-line-clamp: 2;
   }
 }
+
+/* Background music: sound toggle and playback failure notice. */
+.hero-actions {
+  flex-wrap: wrap;
+}
+
+.hero-secondary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 24px;
+}
+
+.sound-toggle {
+  min-width: 48px;
+  min-height: 48px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: #c3d0c6;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.sound-toggle svg {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+}
+
+.sound-toggle[aria-pressed='true'] {
+  border-color: rgba(215, 228, 143, 0.5);
+  color: var(--lime);
+  background: rgba(215, 228, 143, 0.1);
+}
+
+.sound-toggle-state {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.sound-toggle-dialog {
+  display: flex;
+  width: fit-content;
+  margin: 12px auto 0;
+}
+
+.sound-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 14px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border: 1px solid rgba(233, 153, 118, 0.45);
+  border-radius: 8px;
+  color: var(--cream);
+  background: rgba(233, 153, 118, 0.12);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.sound-notice p {
+  min-width: 0;
+  flex: 1 1 260px;
+  margin: 0;
+}
+
+.sound-notice-retry {
+  min-width: 48px;
+  min-height: 48px;
+  flex: 0 0 auto;
+  padding: 8px 18px;
+  border: 1px solid rgba(233, 153, 118, 0.6);
+  border-radius: 6px;
+  color: var(--cream);
+  background: rgba(233, 153, 118, 0.2);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .sound-toggle:hover {
+    border-color: rgba(215, 228, 143, 0.5);
+    color: var(--lime);
+  }
+
+  .sound-notice-retry:hover {
+    background: rgba(233, 153, 118, 0.32);
+  }
+}
+
+/* The game header is crowded on phones: keep only the speaker icon there. */
+@media (max-width: 767px),
+  (max-width: 900px) and (orientation: landscape) and (max-height: 520px) {
+  .game-header .sound-toggle {
+    width: 48px;
+    padding: 0;
+  }
+
+  .game-header .sound-toggle-label,
+  .game-header .sound-toggle-state {
+    display: none;
+  }
+}
+
+/* Let the stage name ellipsize instead of squeezing the labels beside it. */
+@media (max-width: 767px) {
+  .game-stage-title span {
+    white-space: nowrap;
+  }
+
+  .pause-button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+}
