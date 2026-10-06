@@ -944,6 +944,40 @@ function isGroundedAndReadyToJump(player?: CuePlayerState): boolean {
   );
 }
 
+/**
+ * Whether the jump already in progress, with no further input, stays above the
+ * obstacle's clearance height from first contact until the player is past it.
+ * The arc is concave, so checking both ends of the overlap covers all of it.
+ */
+function isObstacleClearedByCurrentJump(
+  level: LevelConfig,
+  currentDistance: number,
+  obstacle: ScheduledObstacle,
+  clearance: number,
+  player: CuePlayerState,
+): boolean {
+  const speed = getRunSpeed(level, currentDistance);
+  const overlapStartSeconds = Math.max(
+    0,
+    (obstacle.contactDistance - currentDistance) / speed,
+  );
+  const overlapEndSeconds =
+    (obstacle.contactDistance +
+      obstacle.width +
+      OBSTACLE_COLLISION_CLEARANCE -
+      currentDistance) /
+    speed;
+
+  return [overlapStartSeconds, overlapEndSeconds].every(
+    (seconds) =>
+      getVerticalHeightAtTime(
+        player.jumpHeight,
+        player.jumpVelocity,
+        seconds,
+      ) > clearance,
+  );
+}
+
 function getStateAwareJumpCue(
   level: LevelConfig,
   currentDistance: number,
@@ -951,6 +985,7 @@ function getStateAwareJumpCue(
   cueKey: string,
   cueWindow: ActionableWindow,
   player?: CuePlayerState,
+  nextJumpType?: FollowupJumpType,
 ): ObstacleCue | null {
   if (!player) {
     return null;
@@ -979,6 +1014,25 @@ function getStateAwareJumpCue(
   }
 
   if (obstacle.type !== 'stump' && obstacle.type !== 'gap') {
+    return null;
+  }
+
+  // The optional second jump is also what gets a runner over a gap. When the
+  // jump already in progress clears this obstacle, offering it only spends the
+  // second jump and stretches the airtime: after a stump the runner lands past
+  // the next gap's ground-jump window with no jump left, and after a gap it
+  // does the same to the obstacle that follows. Keep it for that neighbour.
+  if (
+    nextJumpType !== undefined &&
+    (obstacle.type === 'gap' || nextJumpType === 'gap') &&
+    isObstacleClearedByCurrentJump(
+      level,
+      currentDistance,
+      obstacle,
+      obstacle.type === 'gap' ? GAP_JUMP_CLEARANCE : STUMP_JUMP_CLEARANCE,
+      player,
+    )
+  ) {
     return null;
   }
 
@@ -1214,6 +1268,7 @@ export function getObstacleCue(
         jumpCueKey,
         cueWindow,
         player,
+        nextType,
       );
       if (stateAwareCue) {
         return stateAwareCue;

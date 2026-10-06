@@ -6,6 +6,12 @@ import {
   OBSTACLE_WIDTHS,
 } from './obstaclePattern';
 import { LEVELS } from './levels';
+import {
+  getRunSpeed,
+  getVerticalHeightAtTime,
+  JUMP_GRAVITY,
+  JUMP_IMPULSE,
+} from './physics';
 
 const EXPECTED_DESIGNS = [
   {
@@ -632,5 +638,235 @@ describe('deterministic obstacle patterns', () => {
       key: `${fourthSection.id}:preview`,
       kind: 'preview',
     });
+  });
+});
+
+// A runner already in the air for one obstacle must not be told to spend the
+// only airborne jump on it when the jump in progress already clears it and the
+// gap or stump right next to it needs that jump instead. Level 11 is where the
+// stump, gap, stump follow-up caught players out; the rule itself is shared.
+describe('second-jump cues next to a gap', () => {
+  type CuePlayer = NonNullable<Parameters<typeof getObstacleCue>[2]>;
+  interface ShownCue {
+    key: string;
+    kind: string;
+    firstDistance: number;
+    lastDistance: number;
+  }
+
+  const level = LEVELS[10]!;
+  const { sections } = expandObstaclePattern(level);
+  const pairSection = sections[0]!;
+  const gapStumpSection = sections[1]!;
+  const stumpGapStumpSection = sections[2]!;
+  const [firstStumpContact, gapContact, trailingStumpContact] =
+    stumpGapStumpSection.followupJumpContactDistances;
+  const grounded: CuePlayer = {
+    jumpHeight: 0,
+    jumpVelocity: 0,
+    jumpsUsed: 0,
+    slideHeld: false,
+  };
+
+  /** Distances at which a grounded runner is told to jump for `cueKey`. */
+  function groundJumpWindow(cueKey: string, contactDistance: number) {
+    const distances: number[] = [];
+    for (
+      let distance = contactDistance - 400;
+      distance < contactDistance;
+      distance += 1
+    ) {
+      const cue = getObstacleCue(level, distance, grounded);
+      if (cue?.key === cueKey && cue.kind === 'jump') {
+        distances.push(distance);
+      }
+    }
+    return distances;
+  }
+
+  /** Takeoffs near the start, middle and end of an ordinary jump window. */
+  function takeoffsAcross(distances: number[]) {
+    return [
+      distances[7]!,
+      distances[Math.floor(distances.length / 2)]!,
+      distances[distances.length - 6]!,
+    ];
+  }
+
+  /**
+   * What a runner who pressed jump at `takeoffDistance` is shown until landing.
+   */
+  function jumpFrom(takeoffDistance: number) {
+    const cues: ShownCue[] = [];
+    let seconds = 0;
+    for (let distance = takeoffDistance + 1; ; distance += 1) {
+      seconds += 1 / getRunSpeed(level, distance - 1);
+      const jumpHeight = getVerticalHeightAtTime(0, JUMP_IMPULSE, seconds);
+      if (jumpHeight <= 0) {
+        return { cues, landing: distance };
+      }
+
+      const cue = getObstacleCue(level, distance, {
+        jumpHeight,
+        jumpVelocity: JUMP_IMPULSE - JUMP_GRAVITY * seconds,
+        jumpsUsed: 1,
+        slideHeld: false,
+      });
+      if (!cue) {
+        continue;
+      }
+
+      const last = cues.at(-1);
+      if (last?.key === cue.key && last.kind === cue.kind) {
+        last.lastDistance = distance;
+      } else {
+        cues.push({
+          key: cue.key,
+          kind: cue.kind,
+          firstDistance: distance,
+          lastDistance: distance,
+        });
+      }
+    }
+  }
+
+  const firstStumpWindow = groundJumpWindow(
+    `${stumpGapStumpSection.id}:jump-1`,
+    firstStumpContact,
+  );
+  const gapWindow = groundJumpWindow(
+    `${stumpGapStumpSection.id}:jump-2`,
+    gapContact,
+  );
+  const gapOfGapStumpWindow = groundJumpWindow(
+    `${gapStumpSection.id}:jump-1`,
+    gapStumpSection.followupJumpContactDistances[0]!,
+  );
+
+  it('is the level 11 stump, gap, stump follow-up with ordinary jump windows', () => {
+    expect(stumpGapStumpSection.id).toBe('level-11-section-3');
+    expect(stumpGapStumpSection.followupJumps).toEqual([
+      'stump',
+      'gap',
+      'stump',
+    ]);
+    expect(gapStumpSection.followupJumps).toEqual(['gap', 'stump']);
+    expect(pairSection.followupJumps).toEqual(['stump', 'stump']);
+    expect(firstStumpWindow.length).toBeGreaterThan(100);
+    expect(gapWindow.length).toBeGreaterThan(100);
+    expect(gapOfGapStumpWindow.length).toBeGreaterThan(100);
+  });
+
+  it.each(takeoffsAcross(firstStumpWindow))(
+    'saves the second jump for the gap when a jump from %i already clears the first stump',
+    (takeoff) => {
+      const { cues } = jumpFrom(takeoff);
+      const shown = cues.map(({ key, kind }) => `${key}|${kind}`);
+      const preparedAt = shown.indexOf(
+        `${stumpGapStumpSection.id}:jump-2:second-prepare|prepare`,
+      );
+      const doubleJumpAt = shown.indexOf(
+        `${stumpGapStumpSection.id}:jump-2:second|doubleJump`,
+      );
+
+      expect.soft(
+        cues.filter(({ key }) =>
+          key.startsWith(`${stumpGapStumpSection.id}:jump-1:second`),
+        ),
+        'the first stump is not offered the second jump',
+      ).toEqual([]);
+      expect.soft(
+        preparedAt,
+        'the gap second jump is announced',
+      ).toBeGreaterThanOrEqual(0);
+      expect.soft(
+        doubleJumpAt,
+        'the gap second jump follows its announcement',
+      ).toBeGreaterThan(preparedAt);
+      expect.soft(
+        cues[doubleJumpAt]?.lastDistance,
+        'the gap second jump can still be taken before the gap is reached',
+      ).toBeLessThan(gapContact);
+    },
+  );
+
+  it('still offers the ordinary gap jump to a runner who lands from an early first-stump jump', () => {
+    const { landing } = jumpFrom(takeoffsAcross(firstStumpWindow)[0]!);
+
+    expect(landing).toBeLessThanOrEqual(gapWindow.at(-1)!);
+    expect(getObstacleCue(level, landing, grounded)).toMatchObject({
+      key: `${stumpGapStumpSection.id}:jump-2`,
+      kind: 'jump',
+    });
+  });
+
+  it.each(takeoffsAcross(gapWindow))(
+    'saves the second jump for the trailing stump when a ground jump from %i already clears the gap',
+    (takeoff) => {
+      const { cues } = jumpFrom(takeoff);
+      const shown = cues.map(({ key, kind }) => `${key}|${kind}`);
+      const preparedAt = shown.indexOf(
+        `${stumpGapStumpSection.id}:jump-3:second-prepare|prepare`,
+      );
+      const doubleJumpAt = shown.indexOf(
+        `${stumpGapStumpSection.id}:jump-3:second|doubleJump`,
+      );
+
+      expect.soft(
+        cues.filter(({ key }) =>
+          key.startsWith(`${stumpGapStumpSection.id}:jump-2:second`),
+        ),
+        'the gap is not offered the second jump',
+      ).toEqual([]);
+      expect.soft(
+        preparedAt,
+        'the trailing stump second jump is announced',
+      ).toBeGreaterThanOrEqual(0);
+      expect.soft(
+        doubleJumpAt,
+        'the trailing stump second jump follows its announcement',
+      ).toBeGreaterThan(preparedAt);
+      expect.soft(
+        cues[doubleJumpAt]?.lastDistance,
+        'the trailing stump second jump can still be taken before the stump is reached',
+      ).toBeLessThan(trailingStumpContact);
+    },
+  );
+
+  it('still offers the second jump when the jump in progress would land in the stump', () => {
+    const { cues } = jumpFrom(firstStumpWindow[0]! - 40);
+
+    expect(cues).toContainEqual(
+      expect.objectContaining({
+        key: `${stumpGapStumpSection.id}:jump-1:second`,
+        kind: 'doubleJump',
+      }),
+    );
+  });
+
+  it('still offers the second jump when the jump in progress would drop into the gap', () => {
+    const { cues } = jumpFrom(gapOfGapStumpWindow[0]! - 40);
+
+    expect(cues).toContainEqual(
+      expect.objectContaining({
+        key: `${gapStumpSection.id}:jump-1:second`,
+        kind: 'doubleJump',
+      }),
+    );
+  });
+
+  it('leaves the stump pair its own second-jump cue', () => {
+    const pairWindow = groundJumpWindow(
+      `${pairSection.id}:double-jump-1:first`,
+      pairSection.followupJumpContactDistances[0]!,
+    );
+    const { cues } = jumpFrom(takeoffsAcross(pairWindow)[1]!);
+
+    expect(cues).toContainEqual(
+      expect.objectContaining({
+        key: `${pairSection.id}:double-jump-1:second`,
+        kind: 'doubleJump',
+      }),
+    );
   });
 });

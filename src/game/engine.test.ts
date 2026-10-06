@@ -23,6 +23,8 @@ import {
   HIGH_STUMP_CUE_MARGIN,
   OBSTACLE_WIDTHS,
   PLAYER_COLLISION_WIDTH,
+  type ExpandedSlideSection,
+  type ObstacleCue,
 } from './obstaclePattern';
 import {
   ARCH_HEIGHT,
@@ -1786,4 +1788,388 @@ describe('ground gate (arch) swept overlap within one frame', () => {
       expectGateMissed(after);
     });
   });
+});
+
+interface FollowedCue {
+  key: string;
+  kind: ObstacleCue['kind'];
+  distance: number;
+  jumpsUsed: number;
+}
+
+interface FollowedCueRoute {
+  /** Cues the runner actually pressed jump for, in order. */
+  jumps: FollowedCue[];
+  /** Each cue the runner saw, recorded the frame it first appeared. */
+  cues: FollowedCue[];
+  /** `type@contactDistance` of every obstacle the runner collided with. */
+  collisions: string[];
+  final: GameState;
+}
+
+function canTakeJumpCue(
+  cue: ObstacleCue | null,
+  player: PlayerState,
+): cue is ObstacleCue {
+  if (!cue || player.slideHeld) {
+    return false;
+  }
+
+  if (cue.kind === 'jump') {
+    return (
+      player.jumpHeight === 0 &&
+      player.jumpVelocity === 0 &&
+      player.jumpsUsed === 0
+    );
+  }
+
+  return (
+    cue.kind === 'doubleJump' &&
+    player.jumpHeight > 0 &&
+    player.jumpsUsed === 1
+  );
+}
+
+/**
+ * Plays the real cue -> input -> physics loop through the follow-up obstacles
+ * of one slide section. Every frame asks `getObstacleCue` for guidance, presses
+ * jump the first frame a jump cue the runner can actually take is on screen,
+ * and advances the engine. Pickups are disabled, so any energy loss beyond
+ * passive drain is an obstacle collision.
+ */
+function followEveryJumpCue(
+  level: (typeof LEVELS)[number],
+  section: ExpandedSlideSection,
+  frameSeconds: number,
+  startingEnergy: number,
+): FollowedCueRoute {
+  const { obstacles } = expandObstaclePattern(level);
+  let state: GameState = {
+    ...createGameState(level),
+    distance: section.lastArchClearDistance,
+    energy: startingEnergy,
+    nextScheduledObstacleIndex: obstacles.findIndex(
+      (obstacle) =>
+        obstacle.contactDistance +
+          obstacle.width +
+          PLAYER_COLLISION_WIDTH >
+        section.lastArchClearDistance,
+    ),
+    nextPickupIn: Number.POSITIVE_INFINITY,
+  };
+  const passiveDrain =
+    CUSTOM_GAME_TUNING.passiveEnergyDrainPerSecond * frameSeconds;
+  const jumps: FollowedCue[] = [];
+  const cues: FollowedCue[] = [];
+  const collisions: string[] = [];
+  let shownCue = '';
+
+  while (
+    state.status === 'running' &&
+    state.distance < section.finalFollowupClearDistance
+  ) {
+    const cue = getObstacleCue(level, state.distance, state.player);
+    const cueId = cue ? `${cue.key}|${cue.kind}` : '';
+    if (cue) {
+      const followed = {
+        key: cue.key,
+        kind: cue.kind,
+        distance: state.distance,
+        jumpsUsed: state.player.jumpsUsed,
+      };
+      if (cueId !== shownCue) {
+        cues.push(followed);
+      }
+      if (canTakeJumpCue(cue, state.player)) {
+        jumps.push(followed);
+        state = applyPlayerAction(state, 'jump');
+      }
+    }
+    shownCue = cueId;
+
+    const energyBefore = state.energy;
+    state = advanceGame(state, frameSeconds, () => 0.9);
+    if (state.energy < energyBefore - passiveDrain - 1e-9) {
+      const struck = obstacles.find(
+        (obstacle) =>
+          obstacle.contactDistance < state.distance &&
+          state.distance <
+            obstacle.contactDistance + obstacle.width + PLAYER_COLLISION_WIDTH,
+      );
+      collisions.push(
+        struck
+          ? `${struck.type}@${struck.contactDistance}`
+          : `unknown@${state.distance}`,
+      );
+    }
+  }
+
+  return { jumps, cues, collisions, final: state };
+}
+
+// One collision costs 34 energy, so one point more makes a single hit fatal.
+const LOW_ENERGY = CUSTOM_GAME_TUNING.collisionEnergyCost + 1;
+
+// Fast displays, the usual 60 Hz, and the slow end: `advanceGame` clamps a
+// frame to 0.05 s, so 20 Hz is the slowest the runner is ever simulated at.
+const CUE_FRAME_RATES = [
+  ['240 Hz', 1 / 240],
+  ['144 Hz', 1 / 144],
+  ['120 Hz', 1 / 120],
+  ['60 Hz', 1 / 60],
+  ['30 Hz', 1 / 30],
+  ['the 20 Hz frame clamp', 0.05],
+] as const;
+
+describe('level 11 section 3 stump -> gap -> stump cue route', () => {
+  const level = LEVELS[10]!;
+  const { obstacles, sections } = expandObstaclePattern(level);
+  const section = sections[2]!;
+  const gap = obstacles.find(
+    (obstacle) => obstacle.patternId === section.id && obstacle.type === 'gap',
+  )!;
+
+  it('is the real stump, gap, stump follow-up of level 11', () => {
+    expect(level.id).toBe(11);
+    expect(section.id).toBe('level-11-section-3');
+    expect(section.followupJumps).toEqual(['stump', 'gap', 'stump']);
+    expect(gap.contactDistance).toBe(section.followupJumpContactDistances[1]);
+  });
+
+  it.each(CUE_FRAME_RATES)(
+    'keeps the double jump for the gap instead of spending it on the first stump at %s',
+    (_label, frameSeconds) => {
+      const route = followEveryJumpCue(
+        level,
+        section,
+        frameSeconds,
+        LOW_ENERGY,
+      );
+
+      expect.soft(
+        route.cues.filter(({ key }) =>
+          key.startsWith(`${section.id}:jump-1:second`),
+        ),
+        'no optional second jump is offered for the first stump',
+      ).toEqual([]);
+
+      const gapPrepareIndex = route.cues.findIndex(
+        ({ key, kind }) =>
+          key === `${section.id}:jump-2:second-prepare` && kind === 'prepare',
+      );
+      const gapDoubleJumpIndex = route.cues.findIndex(
+        ({ key, kind }) =>
+          key === `${section.id}:jump-2:second` && kind === 'doubleJump',
+      );
+      expect.soft(
+        gapPrepareIndex,
+        'the airborne runner is told to prepare for the gap',
+      ).toBeGreaterThanOrEqual(0);
+      expect.soft(
+        gapDoubleJumpIndex,
+        'the gap double-jump cue follows its preparation',
+      ).toBeGreaterThan(gapPrepareIndex);
+
+      expect.soft(
+        route.jumps
+          .slice(0, 3)
+          .map(({ key, kind, jumpsUsed }) => ({ key, kind, jumpsUsed })),
+        'the first three jump presses, in order',
+      ).toEqual([
+        { key: `${section.id}:jump-1`, kind: 'jump', jumpsUsed: 0 },
+        {
+          key: `${section.id}:jump-2:second`,
+          kind: 'doubleJump',
+          jumpsUsed: 1,
+        },
+        { key: `${section.id}:jump-3`, kind: 'jump', jumpsUsed: 0 },
+      ]);
+      expect.soft(
+        route.jumps[1]?.distance,
+        'the gap double jump is taken before the gap is reached',
+      ).toBeLessThan(gap.contactDistance);
+    },
+  );
+
+  it.each(CUE_FRAME_RATES)(
+    'clears the stump, gap and trailing stump without a collision from low energy at %s',
+    (_label, frameSeconds) => {
+      const route = followEveryJumpCue(
+        level,
+        section,
+        frameSeconds,
+        LOW_ENERGY,
+      );
+
+      expect.soft(route.collisions, 'obstacle collisions').toEqual([]);
+      expect.soft(route.final.status, 'run status').toBe('running');
+      expect.soft(route.final.energy, 'remaining energy').toBeGreaterThan(0);
+      expect.soft(
+        route.final.distance,
+        'the runner reaches the end of the follow-up',
+      ).toBeGreaterThanOrEqual(section.finalFollowupClearDistance);
+    },
+  );
+});
+
+// Same root cause, mirrored: once a single jump already clears the gap, the
+// optional second jump belongs to the stump that follows it.
+describe('level 11 section 2 gap -> stump cue route', () => {
+  const level = LEVELS[10]!;
+  const { obstacles, sections } = expandObstaclePattern(level);
+  const section = sections[1]!;
+  const stump = obstacles.find(
+    (obstacle) =>
+      obstacle.patternId === section.id && obstacle.type === 'stump',
+  )!;
+
+  it('is the real gap, stump follow-up of level 11', () => {
+    expect(section.id).toBe('level-11-section-2');
+    expect(section.followupJumps).toEqual(['gap', 'stump']);
+    expect(stump.contactDistance).toBe(section.followupJumpContactDistances[1]);
+  });
+
+  it.each(CUE_FRAME_RATES)(
+    'keeps the double jump for the stump instead of spending it on the gap at %s',
+    (_label, frameSeconds) => {
+      const route = followEveryJumpCue(
+        level,
+        section,
+        frameSeconds,
+        LOW_ENERGY,
+      );
+
+      expect.soft(
+        route.cues.filter(({ key }) =>
+          key.startsWith(`${section.id}:jump-1:second`),
+        ),
+        'no optional second jump is offered for the gap',
+      ).toEqual([]);
+
+      const preparedIndex = route.cues.findIndex(
+        ({ key, kind }) =>
+          key === `${section.id}:jump-2:second-prepare` && kind === 'prepare',
+      );
+      const doubleJumpIndex = route.cues.findIndex(
+        ({ key, kind }) =>
+          key === `${section.id}:jump-2:second` && kind === 'doubleJump',
+      );
+      expect.soft(
+        preparedIndex,
+        'the airborne runner is told to prepare for the stump',
+      ).toBeGreaterThanOrEqual(0);
+      expect.soft(
+        doubleJumpIndex,
+        'the stump double-jump cue follows its preparation',
+      ).toBeGreaterThan(preparedIndex);
+
+      expect.soft(
+        route.jumps.map(({ key, kind, jumpsUsed }) => ({
+          key,
+          kind,
+          jumpsUsed,
+        })),
+        'the jump presses, in order',
+      ).toEqual([
+        { key: `${section.id}:jump-1`, kind: 'jump', jumpsUsed: 0 },
+        {
+          key: `${section.id}:jump-2:second`,
+          kind: 'doubleJump',
+          jumpsUsed: 1,
+        },
+      ]);
+      expect.soft(
+        route.jumps[1]?.distance,
+        'the stump double jump is taken before the stump is reached',
+      ).toBeLessThan(stump.contactDistance);
+    },
+  );
+
+  it.each(CUE_FRAME_RATES)(
+    'clears the gap and the trailing stump without a collision from low energy at %s',
+    (_label, frameSeconds) => {
+      const route = followEveryJumpCue(
+        level,
+        section,
+        frameSeconds,
+        LOW_ENERGY,
+      );
+
+      expect.soft(route.collisions, 'obstacle collisions').toEqual([]);
+      expect.soft(route.final.status, 'run status').toBe('running');
+      expect.soft(route.final.energy, 'remaining energy').toBeGreaterThan(0);
+      expect.soft(
+        route.final.distance,
+        'the runner reaches the end of the follow-up',
+      ).toBeGreaterThanOrEqual(section.finalFollowupClearDistance);
+    },
+  );
+});
+
+// The rule is shared, not a level 11 special case, so every real section that
+// puts a gap next to a stump has to be clearable by following the cues.
+// `[stump, stump, gap]` is left out on purpose: its stumps are a jump pair that
+// already uses the second jump, and how far the pair lands from the gap is
+// level geometry this cue-only change does not touch (level 12 section 4 still
+// hits its gap at the 20 Hz clamp with or without it).
+const GAP_NEXT_TO_STUMP_SEQUENCES = [
+  'stump,gap',
+  'gap,stump',
+  'stump,gap,stump',
+];
+const GAP_NEXT_TO_STUMP_SECTIONS = LEVELS.flatMap((level) =>
+  expandObstaclePattern(level).sections.flatMap((section, index) =>
+    GAP_NEXT_TO_STUMP_SEQUENCES.includes(section.followupJumps.join(','))
+      ? [
+          {
+            // Vitest cuts `$name` at 40 characters, so keep the title short.
+            name: `L${level.id} section ${index + 1}: ${section.followupJumps.join(' > ')}`,
+            level,
+            section,
+          },
+        ]
+      : [],
+  ),
+);
+
+describe('stump and gap follow-ups with a gap next to a stump', () => {
+  it('covers every such sequence on more than one level', () => {
+    expect(
+      [
+        ...new Set(
+          GAP_NEXT_TO_STUMP_SECTIONS.map(({ section }) =>
+            section.followupJumps.join(','),
+          ),
+        ),
+      ].sort(),
+    ).toEqual([...GAP_NEXT_TO_STUMP_SEQUENCES].sort());
+    expect(
+      new Set(GAP_NEXT_TO_STUMP_SECTIONS.map(({ level }) => level.id)).size,
+    ).toBeGreaterThan(1);
+  });
+
+  it.each(GAP_NEXT_TO_STUMP_SECTIONS)(
+    '$name is cleared by following every jump cue at every frame rate',
+    ({ level, section }) => {
+      const failures = CUE_FRAME_RATES.flatMap(([label, frameSeconds]) => {
+        const route = followEveryJumpCue(
+          level,
+          section,
+          frameSeconds,
+          LOW_ENERGY,
+        );
+        return route.collisions.length > 0 || route.final.status !== 'running'
+          ? [
+              {
+                rate: label,
+                collisions: route.collisions,
+                status: route.final.status,
+              },
+            ]
+          : [];
+      });
+
+      expect(failures).toEqual([]);
+    },
+  );
 });
