@@ -32,6 +32,10 @@ export const SECTION_PREVIEW_LEAD_DISTANCE = 650;
 export const MIN_RECOVERY_CUE_DISTANCE = 300;
 export const SAFE_FINISH_DISTANCE = 650;
 const DOUBLE_JUMP_CUE_MARGIN = 6;
+// `advanceGame` simulates at most 50 ms at a time, so a runner who touches down
+// partway through a frame first gets to act on the next one, at most this long
+// after landing.
+const LANDING_RESPONSE_SECONDS = 0.05;
 export const HIGH_STUMP_CUE_MARGIN = 2;
 export const HIGH_STUMP_DOUBLE_JUMP_MIN_CONTACT_LEAD_SECONDS = 0.08;
 const MIN_HIGH_STUMP_DOUBLE_JUMP_CUE_SECONDS = 0.15;
@@ -944,6 +948,13 @@ function isGroundedAndReadyToJump(player?: CuePlayerState): boolean {
   );
 }
 
+function getSecondsUntilLanding(height: number, velocity: number): number {
+  return (
+    (velocity + Math.sqrt(velocity ** 2 + 2 * JUMP_GRAVITY * height)) /
+    JUMP_GRAVITY
+  );
+}
+
 /**
  * Whether the jump already in progress, with no further input, stays above the
  * obstacle's clearance height from first contact until the player is past it.
@@ -986,6 +997,7 @@ function getStateAwareJumpCue(
   cueWindow: ActionableWindow,
   player?: CuePlayerState,
   nextJumpType?: FollowupJumpType,
+  previousJumpType?: FollowupJumpType,
 ): ObstacleCue | null {
   if (!player) {
     return null;
@@ -1009,11 +1021,42 @@ function getStateAwareJumpCue(
     return null;
   }
 
-  if (player.jumpHeight <= 0 || player.jumpsUsed !== 1) {
+  if (player.jumpHeight <= 0) {
     return null;
   }
 
   if (obstacle.type !== 'stump' && obstacle.type !== 'gap') {
+    return null;
+  }
+
+  const speed = getRunSpeed(level, currentDistance);
+
+  // Next to a gap the runner is often still airborne when the next obstacle's
+  // ground-jump window opens. If the jump in progress touches down inside that
+  // window with time to spare, a plain jump after landing is the way over, so
+  // the second jump is not needed: say so, and keep it in reserve.
+  if (
+    (obstacle.type === 'gap' || previousJumpType === 'gap') &&
+    currentDistance < obstacle.contactDistance
+  ) {
+    const landingDistance =
+      currentDistance +
+      speed * getSecondsUntilLanding(player.jumpHeight, player.jumpVelocity);
+    if (
+      landingDistance <=
+      cueWindow.endDistance - speed * LANDING_RESPONSE_SECONDS
+    ) {
+      return landingDistance >= cueWindow.startDistance
+        ? {
+            key: cueKey,
+            kind: 'jump',
+            text: `先別在空中按跳，落地後立刻跳過${getJumpName(obstacle.type)}。`,
+          }
+        : null;
+    }
+  }
+
+  if (player.jumpsUsed !== 1) {
     return null;
   }
 
@@ -1047,7 +1090,6 @@ function getStateAwareJumpCue(
     return null;
   }
 
-  const speed = getRunSpeed(level, currentDistance);
   const clearDistance =
     obstacle.contactDistance +
     obstacle.width +
@@ -1269,6 +1311,7 @@ export function getObstacleCue(
         cueWindow,
         player,
         nextType,
+        jumpIndex > 0 ? section.followupJumps[jumpIndex - 1] : undefined,
       );
       if (stateAwareCue) {
         return stateAwareCue;

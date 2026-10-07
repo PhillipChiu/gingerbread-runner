@@ -61,6 +61,11 @@ interface AdvancedLevelDesign {
   pickupInterval: number;
   gapChance: number;
   pairGapPx: number;
+  /**
+   * Follow-up spacing for single slide sections, keyed by zero-based section
+   * index, where it has to differ from the level's `pairGapPx`.
+   */
+  sectionPairGapPx?: Readonly<Record<number, number>>;
   archCount: number;
   archPitchPx: number;
   recoveryPx: number;
@@ -88,6 +93,12 @@ const ADVANCED_LEVEL_DESIGNS: readonly AdvancedLevelDesign[] = [
     pickupInterval: 0.98,
     gapChance: 0.29,
     pairGapPx: 95,
+    // Section 3 is stump -> gap -> stump. At 95 px the gap's ground-jump window
+    // opens only after the runner has already landed from the first stump, which
+    // leaves too little time to read a cue and answer it; the wider spacing
+    // lets a runner who needs 200 ms per cue clear all three (see the
+    // "200 ms reaction delay" tests in engine.test.ts).
+    sectionPairGapPx: { 2: 225 },
     archCount: 8,
     archPitchPx: 114,
     recoveryPx: 500,
@@ -373,7 +384,8 @@ function createAdvancedLevel(
             (sectionIndex + sequenceOffset) %
               ADVANCED_FOLLOWUP_PATTERNS.length
           ]!,
-        jumpPairClearancePx: design.pairGapPx,
+        jumpPairClearancePx:
+          design.sectionPairGapPx?.[sectionIndex] ?? design.pairGapPx,
         recoveryPx: design.recoveryPx,
       })),
     },

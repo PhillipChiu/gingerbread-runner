@@ -23,8 +23,10 @@ import {
   HIGH_STUMP_CUE_MARGIN,
   OBSTACLE_WIDTHS,
   PLAYER_COLLISION_WIDTH,
+  SAFE_FINISH_DISTANCE,
   type ExpandedSlideSection,
   type ObstacleCue,
+  type ScheduledObstacle,
 } from './obstaclePattern';
 import {
   ARCH_HEIGHT,
@@ -1793,6 +1795,7 @@ describe('ground gate (arch) swept overlap within one frame', () => {
 interface FollowedCue {
   key: string;
   kind: ObstacleCue['kind'];
+  text: string;
   distance: number;
   jumpsUsed: number;
 }
@@ -1874,6 +1877,7 @@ function followEveryJumpCue(
       const followed = {
         key: cue.key,
         kind: cue.kind,
+        text: cue.text,
         distance: state.distance,
         jumpsUsed: state.player.jumpsUsed,
       };
@@ -1907,6 +1911,155 @@ function followEveryJumpCue(
   return { jumps, cues, collisions, final: state };
 }
 
+/** Time a runner needs to see a cue and act on it; the user's acceptance bar. */
+const REACTION_SECONDS = 0.2;
+const REACTION_EPSILON = 1e-9;
+
+interface ReactionPress {
+  key: string;
+  kind: ObstacleCue['kind'];
+  /** Seconds the cue had been on screen, counted from its first frame. */
+  secondsSinceCueAppeared: number;
+  distance: number;
+  jumpsUsed: number;
+}
+
+interface ReactionCueWindow {
+  key: string;
+  kind: ObstacleCue['kind'];
+  appearedAtSeconds: number;
+  lastSeenAtSeconds: number;
+  /** Jumps already spent on the cue's first frame; above 0 means still in the air. */
+  appearedWithJumpsUsed: number;
+}
+
+interface ReactionRoute {
+  /** Every jump the runner pressed, in order. */
+  presses: ReactionPress[];
+  /** Every jump cue that was on screen, from its first frame to its last. */
+  cueWindows: ReactionCueWindow[];
+  /** `type@contactDistance` of every obstacle the runner collided with. */
+  collisions: string[];
+  final: GameState;
+}
+
+interface ReactionRouteOptions {
+  /** Slides the frame grid by a fraction of a frame (0 <= phase < 1). */
+  framePhase?: number;
+  /** Holds the first jump back until the runner has reached this distance. */
+  firstJumpFromDistance?: number;
+}
+
+/**
+ * Plays the real cue -> input -> physics loop like a runner who needs
+ * `reactionSeconds` to answer a cue. The clock for a jump cue starts on the
+ * first frame it is on screen (a cue with a different key or kind starts a new
+ * one) and the jump is pressed on the first frame the cue is still showing, the
+ * clock has run out and the press can actually take effect. Nothing is
+ * buffered: a press that cannot be taken the moment it is made is not made, and
+ * a cue that leaves the screen before the clock runs out is never answered.
+ * `framePhase` slides the start by a fraction of a frame, so a pass does not
+ * depend on how the frame grid happens to line up with the cue windows.
+ */
+function followCuesWithReactionDelay(
+  level: (typeof LEVELS)[number],
+  section: ExpandedSlideSection,
+  frameSeconds: number,
+  startingEnergy: number,
+  reactionSeconds: number,
+  { framePhase = 0, firstJumpFromDistance }: ReactionRouteOptions = {},
+): ReactionRoute {
+  const { obstacles } = expandObstaclePattern(level);
+  const startDistance =
+    section.lastArchClearDistance +
+    framePhase *
+      frameSeconds *
+      getRunSpeed(level, section.lastArchClearDistance);
+  let state: GameState = {
+    ...createGameState(level),
+    distance: startDistance,
+    energy: startingEnergy,
+    nextScheduledObstacleIndex: obstacles.findIndex(
+      (obstacle) =>
+        obstacle.contactDistance +
+          obstacle.width +
+          PLAYER_COLLISION_WIDTH >
+        startDistance,
+    ),
+    nextPickupIn: Number.POSITIVE_INFINITY,
+  };
+  const passiveDrain =
+    CUSTOM_GAME_TUNING.passiveEnergyDrainPerSecond * frameSeconds;
+  const presses: ReactionPress[] = [];
+  const cueWindows: ReactionCueWindow[] = [];
+  const collisions: string[] = [];
+  let showing = null as ReactionCueWindow | null;
+
+  for (
+    let frame = 0;
+    state.status === 'running' &&
+    state.distance < section.finalFollowupClearDistance;
+    frame += 1
+  ) {
+    const seconds = frame * frameSeconds;
+    const cue = getObstacleCue(level, state.distance, state.player);
+    const jumpCue =
+      cue && (cue.kind === 'jump' || cue.kind === 'doubleJump') ? cue : null;
+
+    if (!jumpCue) {
+      showing = null;
+    } else {
+      if (showing?.key !== jumpCue.key || showing.kind !== jumpCue.kind) {
+        showing = {
+          key: jumpCue.key,
+          kind: jumpCue.kind,
+          appearedAtSeconds: seconds,
+          lastSeenAtSeconds: seconds,
+          appearedWithJumpsUsed: state.player.jumpsUsed,
+        };
+        cueWindows.push(showing);
+      }
+      showing.lastSeenAtSeconds = seconds;
+
+      const waited = seconds - showing.appearedAtSeconds;
+      if (
+        waited >= reactionSeconds - REACTION_EPSILON &&
+        canTakeJumpCue(jumpCue, state.player) &&
+        (presses.length > 0 ||
+          firstJumpFromDistance === undefined ||
+          state.distance >= firstJumpFromDistance)
+      ) {
+        presses.push({
+          key: jumpCue.key,
+          kind: jumpCue.kind,
+          secondsSinceCueAppeared: waited,
+          distance: state.distance,
+          jumpsUsed: state.player.jumpsUsed,
+        });
+        state = applyPlayerAction(state, 'jump');
+      }
+    }
+
+    const energyBefore = state.energy;
+    state = advanceGame(state, frameSeconds, () => 0.9);
+    if (state.energy < energyBefore - passiveDrain - 1e-9) {
+      const struck = obstacles.find(
+        (obstacle) =>
+          obstacle.contactDistance < state.distance &&
+          state.distance <
+            obstacle.contactDistance + obstacle.width + PLAYER_COLLISION_WIDTH,
+      );
+      collisions.push(
+        struck
+          ? `${struck.type}@${struck.contactDistance}`
+          : `unknown@${state.distance}`,
+      );
+    }
+  }
+
+  return { presses, cueWindows, collisions, final: state };
+}
+
 // One collision costs 34 energy, so one point more makes a single hit fatal.
 const LOW_ENERGY = CUSTOM_GAME_TUNING.collisionEnergyCost + 1;
 
@@ -1925,19 +2078,23 @@ describe('level 11 section 3 stump -> gap -> stump cue route', () => {
   const level = LEVELS[10]!;
   const { obstacles, sections } = expandObstaclePattern(level);
   const section = sections[2]!;
-  const gap = obstacles.find(
-    (obstacle) => obstacle.patternId === section.id && obstacle.type === 'gap',
-  )!;
+  const [firstStump, gap, trailingStump] = obstacles.filter(
+    (obstacle) =>
+      obstacle.patternId === section.id && obstacle.patternRole === 'followup',
+  ) as [ScheduledObstacle, ScheduledObstacle, ScheduledObstacle];
 
   it('is the real stump, gap, stump follow-up of level 11', () => {
     expect(level.id).toBe(11);
     expect(section.id).toBe('level-11-section-3');
     expect(section.followupJumps).toEqual(['stump', 'gap', 'stump']);
+    expect(
+      [firstStump, gap, trailingStump].map(({ type }) => type),
+    ).toEqual(['stump', 'gap', 'stump']);
     expect(gap.contactDistance).toBe(section.followupJumpContactDistances[1]);
   });
 
   it.each(CUE_FRAME_RATES)(
-    'keeps the double jump for the gap instead of spending it on the first stump at %s',
+    'jumps all three obstacles from the ground and never spends the double jump on the first stump at %s',
     (_label, frameSeconds) => {
       const route = followEveryJumpCue(
         level,
@@ -1947,29 +2104,9 @@ describe('level 11 section 3 stump -> gap -> stump cue route', () => {
       );
 
       expect.soft(
-        route.cues.filter(({ key }) =>
-          key.startsWith(`${section.id}:jump-1:second`),
-        ),
-        'no optional second jump is offered for the first stump',
+        route.cues.filter(({ key }) => /:jump-[12]:second/.test(key)),
+        'no optional second jump is offered for the first stump or the gap',
       ).toEqual([]);
-
-      const gapPrepareIndex = route.cues.findIndex(
-        ({ key, kind }) =>
-          key === `${section.id}:jump-2:second-prepare` && kind === 'prepare',
-      );
-      const gapDoubleJumpIndex = route.cues.findIndex(
-        ({ key, kind }) =>
-          key === `${section.id}:jump-2:second` && kind === 'doubleJump',
-      );
-      expect.soft(
-        gapPrepareIndex,
-        'the airborne runner is told to prepare for the gap',
-      ).toBeGreaterThanOrEqual(0);
-      expect.soft(
-        gapDoubleJumpIndex,
-        'the gap double-jump cue follows its preparation',
-      ).toBeGreaterThan(gapPrepareIndex);
-
       expect.soft(
         route.jumps
           .slice(0, 3)
@@ -1977,16 +2114,12 @@ describe('level 11 section 3 stump -> gap -> stump cue route', () => {
         'the first three jump presses, in order',
       ).toEqual([
         { key: `${section.id}:jump-1`, kind: 'jump', jumpsUsed: 0 },
-        {
-          key: `${section.id}:jump-2:second`,
-          kind: 'doubleJump',
-          jumpsUsed: 1,
-        },
+        { key: `${section.id}:jump-2`, kind: 'jump', jumpsUsed: 0 },
         { key: `${section.id}:jump-3`, kind: 'jump', jumpsUsed: 0 },
       ]);
       expect.soft(
         route.jumps[1]?.distance,
-        'the gap double jump is taken before the gap is reached',
+        'the gap jump is taken before the gap is reached',
       ).toBeLessThan(gap.contactDistance);
     },
   );
@@ -2001,19 +2134,198 @@ describe('level 11 section 3 stump -> gap -> stump cue route', () => {
         LOW_ENERGY,
       );
 
-      expect.soft(route.collisions, 'obstacle collisions').toEqual([]);
-      expect.soft(route.final.status, 'run status').toBe('running');
-      expect.soft(route.final.energy, 'remaining energy').toBeGreaterThan(0);
-      expect.soft(
-        route.final.distance,
-        'the runner reaches the end of the follow-up',
-      ).toBeGreaterThanOrEqual(section.finalFollowupClearDistance);
+      expect(listRouteProblems(route, section)).toEqual([]);
+    },
+  );
+
+  it('keeps every ground-jump cue on screen for a 200 ms reaction plus one 20 Hz frame', () => {
+    const grounded: PlayerState = {
+      ...createGameState(level).player,
+      jumpHeight: 0,
+      jumpVelocity: 0,
+      jumpsUsed: 0,
+      slideHeld: false,
+    };
+    const [firstWindow, gapWindow, trailingWindow] = [
+      firstStump,
+      gap,
+      trailingStump,
+    ].map((obstacle, index) => {
+      const key = `${section.id}:jump-${index + 1}`;
+      let shownDistance = 0;
+      for (
+        let distance = obstacle.contactDistance - 400;
+        distance < obstacle.contactDistance;
+        distance += 0.25
+      ) {
+        const cue = getObstacleCue(level, distance, grounded);
+        if (cue?.key === key && cue.kind === 'jump') {
+          shownDistance += 0.25;
+        }
+      }
+      return shownDistance / getRunSpeed(level, obstacle.contactDistance);
+    }) as [number, number, number];
+
+    const needed = REACTION_SECONDS + 0.05;
+    expect.soft(firstWindow, 'first stump window, seconds').toBeGreaterThan(needed);
+    expect.soft(gapWindow, 'gap window, seconds').toBeGreaterThan(needed);
+    expect.soft(trailingWindow, 'trailing stump window, seconds').toBeGreaterThan(needed);
+  });
+});
+
+// Where the frame grid falls against the cue windows is arbitrary on a real
+// display, so the route has to hold for every phase, not just a lucky one.
+const FRAME_PHASES = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875] as const;
+
+// The 200 ms bar, then the same route for slower runners up to one 20 Hz frame
+// (50 ms) later, so the pass is not balanced on a single frame of slack.
+const SLOWER_REACTION_SECONDS = [0.21, 0.22, 0.23, 0.24, 0.25] as const;
+
+/** What went wrong on a route that was supposed to clear the section. */
+function listRouteProblems(
+  route: Pick<FollowedCueRoute, 'collisions' | 'final'>,
+  section: ExpandedSlideSection,
+): string[] {
+  const problems: string[] = [];
+  if (route.collisions.length > 0) {
+    problems.push(`collided with ${route.collisions.join(', ')}`);
+  }
+  if (route.final.status !== 'running') {
+    problems.push(`run status ${route.final.status}`);
+  }
+  if (route.final.energy <= 0) {
+    problems.push(`energy ${route.final.energy}`);
+  }
+  if (route.final.distance < section.finalFollowupClearDistance) {
+    problems.push('never cleared the last obstacle');
+  }
+  return problems;
+}
+
+/** What went wrong on a reaction-delay route beyond `listRouteProblems`. */
+function listReactionProblems(
+  route: ReactionRoute,
+  section: ExpandedSlideSection,
+  reactionSeconds: number,
+): string[] {
+  const problems = listRouteProblems(route, section);
+  if (
+    route.presses.some(
+      ({ secondsSinceCueAppeared }) =>
+        secondsSinceCueAppeared < reactionSeconds - REACTION_EPSILON,
+    )
+  ) {
+    problems.push('pressed before the reaction clock ran out');
+  }
+  section.followupJumps.forEach((_type, index) => {
+    const answered = route.presses.some(
+      ({ key }) =>
+        key === `${section.id}:jump-${index + 1}` ||
+        key === `${section.id}:jump-${index + 1}:second`,
+    );
+    if (!answered) {
+      problems.push(`obstacle ${index + 1} was never answered with a jump`);
+    }
+  });
+  return problems;
+}
+
+describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay', () => {
+  const level = LEVELS[10]!;
+  const { obstacles, sections } = expandObstaclePattern(level);
+  const section = sections[2]!;
+  const firstStump = obstacles.find(
+    (obstacle) =>
+      obstacle.patternId === section.id && obstacle.patternRole === 'followup',
+  )!;
+
+  function findFailures(
+    frameSeconds: number,
+    reactionSeconds: readonly number[],
+    options: Omit<ReactionRouteOptions, 'framePhase'> = {},
+  ) {
+    return reactionSeconds.flatMap((reaction) =>
+      FRAME_PHASES.flatMap((framePhase) => {
+        const route = followCuesWithReactionDelay(
+          level,
+          section,
+          frameSeconds,
+          LOW_ENERGY,
+          reaction,
+          { ...options, framePhase },
+        );
+        const problems = listReactionProblems(route, section, reaction);
+        return problems.length > 0
+          ? [{ reactionMs: Math.round(reaction * 1000), framePhase, problems }]
+          : [];
+      }),
+    );
+  }
+
+  it.each(CUE_FRAME_RATES)(
+    'clears all three obstacles from low energy when every jump waits 200 ms for its cue at %s',
+    (_label, frameSeconds) => {
+      expect(findFailures(frameSeconds, [REACTION_SECONDS])).toEqual([]);
+    },
+  );
+
+  it.each(CUE_FRAME_RATES)(
+    'still clears them when every jump waits up to 250 ms for its cue at %s',
+    (_label, frameSeconds) => {
+      expect(findFailures(frameSeconds, SLOWER_REACTION_SECONDS)).toEqual([]);
+    },
+  );
+
+  // Jumping the first stump late lands too late for a ground jump over the gap,
+  // so the gap is cleared with the second jump and the stump after it with a
+  // ground jump after landing.
+  it.each(CUE_FRAME_RATES)(
+    'clears them when the first stump is jumped late and the gap needs the second jump at %s',
+    (_label, frameSeconds) => {
+      const lateFirstJump = { firstJumpFromDistance: firstStump.contactDistance - 56 };
+
+      expect(
+        findFailures(frameSeconds, [REACTION_SECONDS], lateFirstJump),
+      ).toEqual([]);
+
+      const route = followCuesWithReactionDelay(
+        level,
+        section,
+        frameSeconds,
+        LOW_ENERGY,
+        REACTION_SECONDS,
+        lateFirstJump,
+      );
+      expect(
+        route.presses
+          .slice(0, 3)
+          .map(({ key, kind, jumpsUsed }) => ({ key, kind, jumpsUsed })),
+        'the first three jump presses, in order',
+      ).toEqual([
+        { key: `${section.id}:jump-1`, kind: 'jump', jumpsUsed: 0 },
+        {
+          key: `${section.id}:jump-2:second`,
+          kind: 'doubleJump',
+          jumpsUsed: 1,
+        },
+        { key: `${section.id}:jump-3`, kind: 'jump', jumpsUsed: 0 },
+      ]);
+      // Both jumps are gone by then, so the cue for the trailing stump has to
+      // be on screen while the runner is still in the air: "land, then jump".
+      expect(
+        route.cueWindows.find(({ key }) => key === `${section.id}:jump-3`)
+          ?.appearedWithJumpsUsed,
+        'the trailing stump cue is already showing with both jumps spent',
+      ).toBe(2);
     },
   );
 });
 
 // Same root cause, mirrored: once a single jump already clears the gap, the
-// optional second jump belongs to the stump that follows it.
+// optional second jump belongs to the stump that follows it, and a runner who
+// will touch down inside that stump's ground-jump window is told to jump again
+// after landing instead. Which of the two a runner gets depends on when the gap
+// was jumped, so this route does not pin one.
 describe('level 11 section 2 gap -> stump cue route', () => {
   const level = LEVELS[10]!;
   const { obstacles, sections } = expandObstaclePattern(level);
@@ -2030,7 +2342,7 @@ describe('level 11 section 2 gap -> stump cue route', () => {
   });
 
   it.each(CUE_FRAME_RATES)(
-    'keeps the double jump for the stump instead of spending it on the gap at %s',
+    'does not offer the second jump for the gap and answers the stump before it is reached at %s',
     (_label, frameSeconds) => {
       const route = followEveryJumpCue(
         level,
@@ -2046,41 +2358,15 @@ describe('level 11 section 2 gap -> stump cue route', () => {
         'no optional second jump is offered for the gap',
       ).toEqual([]);
 
-      const preparedIndex = route.cues.findIndex(
-        ({ key, kind }) =>
-          key === `${section.id}:jump-2:second-prepare` && kind === 'prepare',
+      const stumpPress = route.jumps.find(
+        ({ key }) =>
+          key === `${section.id}:jump-2` ||
+          key === `${section.id}:jump-2:second`,
       );
-      const doubleJumpIndex = route.cues.findIndex(
-        ({ key, kind }) =>
-          key === `${section.id}:jump-2:second` && kind === 'doubleJump',
-      );
+      expect.soft(stumpPress, 'the stump is answered with a jump').toBeDefined();
       expect.soft(
-        preparedIndex,
-        'the airborne runner is told to prepare for the stump',
-      ).toBeGreaterThanOrEqual(0);
-      expect.soft(
-        doubleJumpIndex,
-        'the stump double-jump cue follows its preparation',
-      ).toBeGreaterThan(preparedIndex);
-
-      expect.soft(
-        route.jumps.map(({ key, kind, jumpsUsed }) => ({
-          key,
-          kind,
-          jumpsUsed,
-        })),
-        'the jump presses, in order',
-      ).toEqual([
-        { key: `${section.id}:jump-1`, kind: 'jump', jumpsUsed: 0 },
-        {
-          key: `${section.id}:jump-2:second`,
-          kind: 'doubleJump',
-          jumpsUsed: 1,
-        },
-      ]);
-      expect.soft(
-        route.jumps[1]?.distance,
-        'the stump double jump is taken before the stump is reached',
+        stumpPress?.distance,
+        'the stump jump is taken before the stump is reached',
       ).toBeLessThan(stump.contactDistance);
     },
   );
@@ -2095,13 +2381,27 @@ describe('level 11 section 2 gap -> stump cue route', () => {
         LOW_ENERGY,
       );
 
-      expect.soft(route.collisions, 'obstacle collisions').toEqual([]);
-      expect.soft(route.final.status, 'run status').toBe('running');
-      expect.soft(route.final.energy, 'remaining energy').toBeGreaterThan(0);
-      expect.soft(
-        route.final.distance,
-        'the runner reaches the end of the follow-up',
-      ).toBeGreaterThanOrEqual(section.finalFollowupClearDistance);
+      expect(listRouteProblems(route, section)).toEqual([]);
+    },
+  );
+
+  it.each(CUE_FRAME_RATES)(
+    'clears them when every jump waits 200 ms for its cue at %s',
+    (_label, frameSeconds) => {
+      const failures = FRAME_PHASES.flatMap((framePhase) => {
+        const route = followCuesWithReactionDelay(
+          level,
+          section,
+          frameSeconds,
+          LOW_ENERGY,
+          REACTION_SECONDS,
+          { framePhase },
+        );
+        const problems = listReactionProblems(route, section, REACTION_SECONDS);
+        return problems.length > 0 ? [{ framePhase, problems }] : [];
+      });
+
+      expect(failures).toEqual([]);
     },
   );
 });
@@ -2110,8 +2410,8 @@ describe('level 11 section 2 gap -> stump cue route', () => {
 // puts a gap next to a stump has to be clearable by following the cues.
 // `[stump, stump, gap]` is left out on purpose: its stumps are a jump pair that
 // already uses the second jump, and how far the pair lands from the gap is
-// level geometry this cue-only change does not touch (level 12 section 4 still
-// hits its gap at the 20 Hz clamp with or without it).
+// level geometry this change does not touch (level 12 section 4 still hits its
+// gap at the 20 Hz clamp with or without it).
 const GAP_NEXT_TO_STUMP_SEQUENCES = [
   'stump,gap',
   'gap,stump',
@@ -2172,4 +2472,181 @@ describe('stump and gap follow-ups with a gap next to a stump', () => {
       expect(failures).toEqual([]);
     },
   );
+});
+
+// "Don't jump in the air, jump right after landing" is only fair while the
+// runner is still shown that cue on the first frame back on the ground, however
+// long that frame is.
+describe('level 11 cues that say to jump right after landing', () => {
+  const level = LEVELS[10]!;
+  const { obstacles, sections } = expandObstaclePattern(level);
+
+  /** Jumps at `takeoffDistance`, flies on the real engine until touchdown. */
+  function jumpAndLand(takeoffDistance: number, frameSeconds: number) {
+    let state: GameState = applyPlayerAction(
+      {
+        ...createGameState(level),
+        distance: takeoffDistance,
+        nextScheduledObstacleIndex: obstacles.findIndex(
+          (obstacle) =>
+            obstacle.contactDistance +
+              obstacle.width +
+              PLAYER_COLLISION_WIDTH >
+            takeoffDistance,
+        ),
+        nextPickupIn: Number.POSITIVE_INFINITY,
+      },
+      'jump',
+    );
+    let airborneCue: ObstacleCue | null = null;
+    do {
+      state = advanceGame(state, frameSeconds, () => 0.9);
+      if (state.player.jumpHeight > 0) {
+        airborneCue = getObstacleCue(level, state.distance, state.player);
+      }
+    } while (state.player.jumpHeight > 0 && state.status === 'running');
+
+    return {
+      airborneCue,
+      groundedCue: getObstacleCue(level, state.distance, state.player),
+    };
+  }
+
+  it.each(CUE_FRAME_RATES)(
+    'is still on screen on the first frame back on the ground at %s',
+    (_label, frameSeconds) => {
+      let toldToWait = 0;
+      const stale: string[] = [];
+
+      for (const section of [sections[1]!, sections[2]!]) {
+        section.followupJumps.slice(0, -1).forEach((_type, index) => {
+          const takeoffs = getActionableJumpDistances(
+            level,
+            `${section.id}:jump-${index + 1}`,
+            section.followupJumpContactDistances[index]!,
+          ).filter((_distance, position) => position % 3 === 0);
+
+          for (const takeoff of takeoffs) {
+            const { airborneCue, groundedCue } = jumpAndLand(
+              takeoff,
+              frameSeconds,
+            );
+            if (airborneCue?.kind !== 'jump') {
+              continue;
+            }
+            toldToWait += 1;
+            if (
+              groundedCue?.key !== airborneCue.key ||
+              groundedCue.kind !== airborneCue.kind
+            ) {
+              stale.push(
+                `${section.id} jump ${index + 1} from ${takeoff}: told ${airborneCue.key} in the air, then ${groundedCue ? `${groundedCue.key}|${groundedCue.kind}` : 'nothing'}`,
+              );
+            }
+          }
+        });
+      }
+
+      expect(stale).toEqual([]);
+      expect(
+        toldToWait,
+        'the sweep reaches jump-after-landing cues',
+      ).toBeGreaterThan(20);
+    },
+  );
+});
+
+describe('level 11 follow-up schedule with the wider section 3 spacing', () => {
+  const level = LEVELS[10]!;
+  const { obstacles, sections } = expandObstaclePattern(level);
+  const spacingOf = (target: (typeof LEVELS)[number]) =>
+    target.obstaclePattern.slideSections.map(
+      ({ jumpPairClearancePx }) => jumpPairClearancePx,
+    );
+
+  it('widens only section 3 of level 11; every other level keeps one spacing', () => {
+    expect(spacingOf(level)).toEqual([95, 95, 225, 95]);
+    for (const other of LEVELS.filter(({ id }) => id !== level.id)) {
+      expect(new Set(spacingOf(other)).size, `level ${other.id}`).toBe(1);
+    }
+  });
+
+  it('puts each follow-up its own section clearance past the one before it', () => {
+    for (const section of sections) {
+      const followups = obstacles.filter(
+        (obstacle) =>
+          obstacle.patternId === section.id &&
+          obstacle.patternRole === 'followup',
+      );
+      followups.slice(1).forEach((obstacle, index) => {
+        const previous = followups[index]!;
+        expect(
+          obstacle.contactDistance -
+            previous.contactDistance -
+            previous.width -
+            PLAYER_COLLISION_WIDTH,
+          `${section.id} follow-up ${index + 2}`,
+        ).toBe(section.jumpPairClearancePx);
+      });
+    }
+  });
+
+  it('leaves the other sections and the later obstacle schedule where they were', () => {
+    expect(
+      sections.map((section) => section.followupJumpContactDistances),
+    ).toEqual([
+      [3667, 3879],
+      [7261, 7503],
+      [10883, 11225, 11597],
+      [14477],
+    ]);
+    expect(
+      sections.map(
+        ({ requestedContactDistance, firstArchContactDistance }) => [
+          requestedContactDistance,
+          firstArchContactDistance,
+        ],
+      ),
+      'every section starts at its requested distance',
+    ).toEqual([
+      [1968, 1968],
+      [5576, 5576],
+      [9184, 9184],
+      [12792, 12792],
+    ]);
+    expect(
+      sections.map(({ lastArchClearDistance }) => lastArchClearDistance),
+    ).toEqual([2907, 6501, 10123, 13717]);
+    expect(obstacles).toHaveLength(41);
+  });
+
+  it('keeps the schedule in order and the recovery and safe finish intact', () => {
+    expect(
+      obstacles.every(
+        (obstacle, index) =>
+          index === 0 ||
+          obstacle.contactDistance >= obstacles[index - 1]!.contactDistance,
+      ),
+      'obstacles are sorted by contact distance',
+    ).toBe(true);
+
+    sections.forEach((section, index) => {
+      const next = sections[index + 1];
+      expect(
+        section.recoveryEndDistance - section.finalFollowupClearDistance,
+        `${section.id} recovery length`,
+      ).toBeGreaterThanOrEqual(section.recoveryPx);
+      if (next) {
+        expect(
+          section.recoveryEndDistance,
+          `${section.id} recovery ends where the next section starts`,
+        ).toBe(next.firstArchContactDistance);
+      }
+    });
+
+    const last = sections.at(-1)!;
+    expect(
+      last.finalFollowupClearDistance + SAFE_FINISH_DISTANCE,
+    ).toBeLessThanOrEqual(level.distanceGoal);
+  });
 });
