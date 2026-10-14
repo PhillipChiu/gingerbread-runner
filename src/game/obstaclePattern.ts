@@ -36,6 +36,9 @@ const DOUBLE_JUMP_CUE_MARGIN = 6;
 // partway through a frame first gets to act on the next one, at most this long
 // after landing.
 const LANDING_RESPONSE_SECONDS = 0.05;
+// How long the jump cues assume a runner needs between seeing something change
+// on screen, a touchdown or a cue, and pressing the key.
+const CUE_REACTION_SECONDS = 0.2;
 export const HIGH_STUMP_CUE_MARGIN = 2;
 export const HIGH_STUMP_DOUBLE_JUMP_MIN_CONTACT_LEAD_SECONDS = 0.08;
 const MIN_HIGH_STUMP_DOUBLE_JUMP_CUE_SECONDS = 0.15;
@@ -941,19 +944,47 @@ function getJumpCue(
 /**
  * "Land first, then jump" for a follow-up next to a gap. It is the cue while
  * the runner is still coming down from the previous jump, and the same words
- * stay on screen once they are back on the ground inside the window. Without
- * that, touchdown would swap in a new instruction and the runner would have to
- * read and answer it all over again inside a window that is already short.
+ * stay on screen once they are back on the ground, until the window closes.
+ * Without that, touchdown, or the window opening, would swap in a new
+ * instruction and the runner would have to read and answer it all over again
+ * inside a window that is already short.
+ *
+ * The words never say "at once": how long after touchdown a jump is safe
+ * depends on where the previous jump was taken, and the window can open a
+ * moment after the runner lands. They are `prepare` until it opens and `jump`
+ * from then on, so only the latter asks for a press the instant it appears.
  */
 function getLandFirstCue(
   key: string,
   obstacleType: 'stump' | 'gap',
+  kind: 'prepare' | 'jump' = 'jump',
 ): ObstacleCue {
   return {
     key,
-    kind: 'jump',
-    text: `先別在空中按跳，落地後立刻跳過${getJumpName(obstacleType)}。`,
+    kind,
+    text: `先別在空中按跳，落地後再跳過${getJumpName(obstacleType)}。`,
   };
+}
+
+/**
+ * Where the "land first" words start on the ground: one reaction time before
+ * the ground-jump window opens. A runner who reads them and then takes that
+ * long to press is inside the window, and one who is already looking at them
+ * on touchdown cannot be early either.
+ */
+function getLandFirstStartDistance(
+  cueWindow: ActionableWindow,
+  speed: number,
+): number {
+  return cueWindow.startDistance - speed * CUE_REACTION_SECONDS;
+}
+
+/** The follow-ups that get the "land first" words: a gap, or what comes right after one. */
+function isLandFirstFollowup(
+  obstacleType: FollowupJumpType,
+  previousJumpType?: FollowupJumpType,
+): boolean {
+  return obstacleType === 'gap' || previousJumpType === 'gap';
 }
 
 function isGroundedAndReadyToJump(player?: CuePlayerState): boolean {
@@ -1050,23 +1081,31 @@ function getStateAwareJumpCue(
   const speed = getRunSpeed(level, currentDistance);
 
   // Next to a gap the runner is often still airborne when the next obstacle's
-  // ground-jump window opens. If the jump in progress touches down inside that
-  // window with time to spare, a plain jump after landing is the way over, so
-  // the second jump is not needed: say so, and keep it in reserve.
+  // ground-jump window opens. If the jump in progress touches down early enough
+  // that a runner who needs a reaction time, plus a frame to land and a frame to
+  // see it, still presses inside that window, a plain jump after landing is the
+  // way over, so the second jump is not needed: say so, and keep it in reserve.
+  // A touchdown that early in front of the window has nothing to say yet.
   if (
-    (obstacle.type === 'gap' || previousJumpType === 'gap') &&
+    isLandFirstFollowup(obstacle.type, previousJumpType) &&
     currentDistance < obstacle.contactDistance
   ) {
     const landingDistance =
       currentDistance +
       speed * getSecondsUntilLanding(player.jumpHeight, player.jumpVelocity);
     if (
-      landingDistance <=
-      cueWindow.endDistance - speed * LANDING_RESPONSE_SECONDS
+      landingDistance +
+        speed * (CUE_REACTION_SECONDS + 2 * LANDING_RESPONSE_SECONDS) <=
+      cueWindow.endDistance
     ) {
-      return landingDistance >= cueWindow.startDistance
-        ? getLandFirstCue(cueKey, obstacle.type)
-        : null;
+      if (landingDistance < getLandFirstStartDistance(cueWindow, speed)) {
+        return null;
+      }
+      return getLandFirstCue(
+        cueKey,
+        obstacle.type,
+        landingDistance >= cueWindow.startDistance ? 'jump' : 'prepare',
+      );
     }
   }
 
@@ -1340,6 +1379,19 @@ export function getObstacleCue(
           section.followupJumpContactDistances[jumpIndex - 1]! +
           OBSTACLE_WIDTHS[previousJumpType] +
           OBSTACLE_COLLISION_CLEARANCE;
+        const landFirst = isLandFirstFollowup(jumpType, previousJumpType);
+        // The follow-ups `getStateAwareJumpCue` answers with the airborne
+        // land-first cue keep those words on the ground, and they start
+        // before the window does.
+        const instructionStart = landFirst
+          ? Math.max(
+              previousJumpClearDistance,
+              getLandFirstStartDistance(
+                cueWindow,
+                getRunSpeed(level, currentDistance),
+              ),
+            )
+          : cueWindow.startDistance;
         const prepareStart = Math.max(
           previousJumpClearDistance,
           contactDistance - JUMP_PREPARE_LEAD_DISTANCE,
@@ -1347,7 +1399,7 @@ export function getObstacleCue(
 
         if (
           currentDistance >= previousJumpClearDistance &&
-          currentDistance < prepareStart
+          currentDistance < Math.min(prepareStart, instructionStart)
         ) {
           return {
             key: `${section.id}:recovery-${jumpIndex}`,
@@ -1358,9 +1410,17 @@ export function getObstacleCue(
 
         if (
           currentDistance >= prepareStart &&
-          currentDistance < cueWindow.startDistance
+          currentDistance < instructionStart
         ) {
           return getPrepareCue(jumpCueKey, jumpType);
+        }
+
+        if (
+          landFirst &&
+          currentDistance >= instructionStart &&
+          currentDistance < cueWindow.startDistance
+        ) {
+          return getLandFirstCue(jumpCueKey, jumpType, 'prepare');
         }
       }
 
@@ -1368,12 +1428,9 @@ export function getObstacleCue(
         currentDistance >= cueWindow.startDistance &&
         currentDistance < cueWindow.endDistance
       ) {
-        // The follow-ups `getStateAwareJumpCue` answers with the airborne
-        // land-first cue keep that cue after touchdown.
         if (
           jumpIndex > 0 &&
-          (jumpType === 'gap' ||
-            section.followupJumps[jumpIndex - 1] === 'gap')
+          isLandFirstFollowup(jumpType, section.followupJumps[jumpIndex - 1])
         ) {
           return getLandFirstCue(jumpCueKey, jumpType);
         }

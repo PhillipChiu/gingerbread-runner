@@ -93,16 +93,18 @@ const ADVANCED_LEVEL_DESIGNS: readonly AdvancedLevelDesign[] = [
     pickupInterval: 0.98,
     gapChance: 0.29,
     pairGapPx: 95,
-    // Section 3 is stump -> gap -> stump. Cues reach the screen on a 120 ms
-    // refresh and the bar is a runner who answers each one 200 ms after it
-    // appears. The gap's ground-jump window is only about 285 ms, so the runner
-    // has to be told "land first, then jump" while still in the air from the
-    // first stump, and that jump has to touch down inside the window. 268 px
-    // (+173 over the 95 px base) is the narrowest spacing at which every first
-    // jump answered 200-250 ms after its cue does; one px closer, a few frame
-    // and refresh phases hit the gap (see the "as the screen delivers the cues"
-    // tests in engine.test.ts).
-    sectionPairGapPx: { 2: 268 },
+    // Section 3 is stump -> gap -> stump. The bar is a runner who answers each
+    // cue 200 ms after it appears on screen (cues reach it on a 120 ms
+    // refresh) and, for a jump that follows a landing, 200 ms after they have
+    // seen themselves touch down. The gap's ground-jump window is only about
+    // 285 ms long, so a first stump jumped late has to touch down early enough
+    // in it for that wait, a render frame and a frame of rounding to fit.
+    // 370 px (+275 over the 95 px base, +102 over the 268 px this had) is the
+    // narrowest spacing at which that holds at every supported frame rate and
+    // frame/refresh phase, with a two-frame landing allowance, a one-frame
+    // display delay, and a first jump taken as late as 50 px before the stump
+    // (see the "as the screen delivers the cues" tests in engine.test.ts).
+    sectionPairGapPx: { 2: 370 },
     archCount: 8,
     archPitchPx: 114,
     recoveryPx: 500,
