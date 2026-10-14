@@ -659,6 +659,14 @@ describe('second-jump cues next to a gap', () => {
     lastDistance: number;
   }
 
+  // The same words in the air and on the ground: touchdown must not swap in a
+  // new instruction the runner would have to read and answer all over again.
+  const LAND_FIRST_GAP = '先別在空中按跳，落地後立刻跳過裂隙。';
+  const LAND_FIRST_STUMP = '先別在空中按跳，落地後立刻跳過樹樁。';
+  // Ground time the cue code keeps for a touchdown response before it stops
+  // telling a runner in the air to land first.
+  const LANDING_RESPONSE_SECONDS = 0.05;
+
   const level = LEVELS[10]!;
   const { sections } = expandObstaclePattern(level);
   const pairSection = sections[0]!;
@@ -780,6 +788,10 @@ describe('second-jump cues next to a gap', () => {
     `${gapStumpSection.id}:jump-1`,
     gapStumpSection.followupJumpContactDistances[0]!,
   );
+  // Gap takeoffs that touch down once the trailing stump's window is open.
+  const gapTakeoffsLandingInTrailingWindow = gapWindow.filter(
+    (takeoff) => jumpFrom(takeoff).landing >= trailingWindow[0]!,
+  );
 
   it('is the level 11 stump, gap, stump follow-up with ordinary jump windows', () => {
     expect(stumpGapStumpSection.id).toBe('level-11-section-3');
@@ -794,6 +806,21 @@ describe('second-jump cues next to a gap', () => {
     expect(gapWindow.length).toBeGreaterThan(100);
     expect(trailingWindow.length).toBeGreaterThan(100);
     expect(gapOfGapStumpWindow.length).toBeGreaterThan(100);
+    expect(gapTakeoffsLandingInTrailingWindow.length).toBeGreaterThan(100);
+  });
+
+  it('keeps the same words on the ground for the whole window of each follow-up', () => {
+    const wordsOver = (distances: number[]) => [
+      ...new Set(distances.map((distance) => groundCueAt(distance)!.text)),
+    ];
+
+    expect(wordsOver(firstStumpWindow), 'the first stump').toEqual([
+      '現在跳過樹樁。',
+    ]);
+    expect(wordsOver(gapWindow), 'the gap').toEqual([LAND_FIRST_GAP]);
+    expect(wordsOver(trailingWindow), 'the trailing stump').toEqual([
+      LAND_FIRST_STUMP,
+    ]);
   });
 
   it.each(takeoffsAcross(firstStumpWindow))(
@@ -830,22 +857,32 @@ describe('second-jump cues next to a gap', () => {
       expect.objectContaining({
         key: jumpKey(2),
         kind: 'jump',
-        text: expect.stringContaining('落地'),
+        text: LAND_FIRST_GAP,
       }),
     ]);
-    expect(groundCueAt(landing), 'the same cue on the ground').toMatchObject({
+    expect(groundCueAt(landing), 'the same words on the ground').toMatchObject({
       key: jumpKey(2),
       kind: 'jump',
+      text: LAND_FIRST_GAP,
     });
   });
 
-  it('keeps the second jump for the gap when the first stump jump lands too late for a ground jump', () => {
-    const { cues, landing } = jumpFrom(takeoffsAcross(firstStumpWindow)[2]!);
+  // Land-first needs a moment of ground time inside the window. A jump that
+  // touches down with less than the landing response left is not told to wait;
+  // it is told about the second jump, which the gap can still be cleared with.
+  it('keeps the second jump for the gap when the first stump jump leaves no time to land first', () => {
+    const { cues, landing } = jumpFrom(firstStumpWindow.at(-1)!);
     const shown = cues.map(({ key, kind }) => `${key}|${kind}`);
     const preparedAt = shown.indexOf(`${jumpKey(2)}:second-prepare|prepare`);
     const doubleJumpAt = shown.indexOf(`${jumpKey(2)}:second|doubleJump`);
 
-    expect(landing).toBeGreaterThan(gapWindow.at(-1)!);
+    expect(landing).toBeGreaterThan(
+      gapWindow.at(-1)! -
+        getRunSpeed(level, gapContact) * LANDING_RESPONSE_SECONDS,
+    );
+    expect(shown, 'never told to land first').not.toContain(
+      `${jumpKey(2)}|jump`,
+    );
     expect.soft(
       preparedAt,
       'the gap second jump is announced',
@@ -860,7 +897,21 @@ describe('second-jump cues next to a gap', () => {
     ).toBeLessThan(gapContact);
   });
 
-  it.each(takeoffsAcross(gapWindow))(
+  it('lets a runner whose gap jump lands before the trailing stump window opens recover and then jump', () => {
+    const { cues, landing } = jumpFrom(gapWindow[7]!);
+
+    expect(landing).toBeLessThan(trailingWindow[0]!);
+    expect(cues, 'nothing in the air invites a press').toEqual([]);
+    expect(groundCueAt(landing)?.kind, 'no jump cue before the window').not.toBe(
+      'jump',
+    );
+    expect(groundCueAt(trailingWindow[0]!)).toMatchObject({
+      key: jumpKey(3),
+      kind: 'jump',
+    });
+  });
+
+  it.each(takeoffsAcross(gapTakeoffsLandingInTrailingWindow))(
     'tells a runner whose jump from %i clears the gap to land first and jump the trailing stump',
     (takeoff) => {
       const { cues, landing } = jumpFrom(takeoff);
@@ -871,44 +922,70 @@ describe('second-jump cues next to a gap', () => {
         expect.objectContaining({
           key: jumpKey(3),
           kind: 'jump',
-          text: expect.stringMatching(/落地.*樹樁/),
+          text: LAND_FIRST_STUMP,
         }),
       ]);
-      expect(groundCueAt(landing), 'the same cue on the ground').toMatchObject({
-        key: jumpKey(3),
-        kind: 'jump',
-      });
+      expect(groundCueAt(landing), 'the same words on the ground').toMatchObject(
+        {
+          key: jumpKey(3),
+          kind: 'jump',
+          text: LAND_FIRST_STUMP,
+        },
+      );
     },
   );
 
-  // A runner who jumped the first stump late spends the second jump on the
-  // gap, and the trailing stump's cue has to reach them while both jumps are
-  // spent and they are still in the air.
+  // A runner who jumped the first stump so late that there is no time to land
+  // first spends the second jump on the gap. Pressed late in its window, that
+  // second jump touches down inside the trailing stump's window, and the cue
+  // has to reach them while both jumps are spent and they are still in the air.
   it('tells a runner who spent both jumps over the gap to land first and jump the trailing stump', () => {
-    const takeoff = firstStumpContact - 56;
+    const takeoff = firstStumpWindow.at(-1)!;
     const gapSecondJump = jumpFrom(takeoff).cues.find(
       ({ key, kind }) =>
         key === `${jumpKey(2)}:second` && kind === 'doubleJump',
     )!;
-    const secondJump = Math.round(
-      (gapSecondJump.firstDistance + gapSecondJump.lastDistance) / 2,
-    );
+    const secondJump = gapSecondJump.lastDistance;
     const { cues, landing } = jumpFrom(takeoff, secondJump);
 
-    expect(gapSecondJump.lastDistance).toBeLessThan(gapContact);
+    expect(secondJump).toBeLessThan(gapContact);
     expect(landing).toBeGreaterThanOrEqual(trailingWindow[0]!);
     expect(landing).toBeLessThanOrEqual(trailingWindow.at(-1)!);
     expect(cues.at(-1), 'on screen from the second jump to landing').toEqual(
       expect.objectContaining({
         key: jumpKey(3),
         kind: 'jump',
-        text: expect.stringMatching(/落地.*樹樁/),
+        text: LAND_FIRST_STUMP,
         firstDistance: secondJump,
       }),
     );
-    expect(groundCueAt(landing), 'the same cue on the ground').toMatchObject({
+    expect(groundCueAt(landing), 'the same words on the ground').toMatchObject({
       key: jumpKey(3),
       kind: 'jump',
+      text: LAND_FIRST_STUMP,
+    });
+  });
+
+  it('lets a runner who spent both jumps early over the gap recover and then jump the trailing stump', () => {
+    const takeoff = firstStumpWindow.at(-1)!;
+    const gapSecondJump = jumpFrom(takeoff).cues.find(
+      ({ key, kind }) =>
+        key === `${jumpKey(2)}:second` && kind === 'doubleJump',
+    )!;
+    const { cues, landing } = jumpFrom(takeoff, gapSecondJump.firstDistance + 3);
+
+    expect(landing).toBeLessThan(trailingWindow[0]!);
+    expect(
+      cues.filter(({ key }) => key === jumpKey(3)),
+      'nothing in the air invites a press for the trailing stump',
+    ).toEqual([]);
+    expect(groundCueAt(landing)?.kind, 'no jump cue before the window').not.toBe(
+      'jump',
+    );
+    expect(groundCueAt(trailingWindow[0]!)).toMatchObject({
+      key: jumpKey(3),
+      kind: 'jump',
+      text: LAND_FIRST_STUMP,
     });
   });
 
@@ -947,5 +1024,54 @@ describe('second-jump cues next to a gap', () => {
         kind: 'doubleJump',
       }),
     );
+  });
+
+  // The rule is shared, so the words in a follow-up's ground window are checked
+  // on every level: next to a gap (the gap itself, or the follow-up right after
+  // one) they are the land-first words the same follow-up shows in the air, and
+  // everywhere else they are the plain instruction.
+  it('shows the land-first words in a ground window only for follow-ups next to a gap', () => {
+    const checked = { nextToGap: 0, plain: 0 };
+    for (const other of LEVELS) {
+      for (const section of expandObstaclePattern(other).sections) {
+        section.followupJumps.forEach((jumpType, index) => {
+          if (jumpType !== 'stump' && jumpType !== 'gap') {
+            return;
+          }
+
+          const contact = section.followupJumpContactDistances[index]!;
+          const key = `${section.id}:jump-${index + 1}`;
+          const words = new Set<string>();
+          for (
+            let distance = contact - 400;
+            distance < contact;
+            distance += 2
+          ) {
+            const cue = getObstacleCue(other, distance, grounded);
+            if (cue?.key === key && cue.kind === 'jump') {
+              words.add(cue.text);
+            }
+          }
+          if (words.size === 0) {
+            // A stump pair answered by its own double-jump cue.
+            return;
+          }
+
+          const name = jumpType === 'gap' ? '裂隙' : '樹樁';
+          const nextToGap =
+            index > 0 &&
+            (jumpType === 'gap' || section.followupJumps[index - 1] === 'gap');
+          checked[nextToGap ? 'nextToGap' : 'plain'] += 1;
+          expect([...words], `${section.id} jump ${index + 1}`).toEqual([
+            nextToGap
+              ? `先別在空中按跳，落地後立刻跳過${name}。`
+              : `現在跳過${name}。`,
+          ]);
+        });
+      }
+    }
+
+    expect(checked.nextToGap).toBeGreaterThan(0);
+    expect(checked.plain).toBeGreaterThan(0);
   });
 });

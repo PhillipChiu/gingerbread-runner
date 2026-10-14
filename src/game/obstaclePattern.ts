@@ -938,6 +938,24 @@ function getJumpCue(
   };
 }
 
+/**
+ * "Land first, then jump" for a follow-up next to a gap. It is the cue while
+ * the runner is still coming down from the previous jump, and the same words
+ * stay on screen once they are back on the ground inside the window. Without
+ * that, touchdown would swap in a new instruction and the runner would have to
+ * read and answer it all over again inside a window that is already short.
+ */
+function getLandFirstCue(
+  key: string,
+  obstacleType: 'stump' | 'gap',
+): ObstacleCue {
+  return {
+    key,
+    kind: 'jump',
+    text: `先別在空中按跳，落地後立刻跳過${getJumpName(obstacleType)}。`,
+  };
+}
+
 function isGroundedAndReadyToJump(player?: CuePlayerState): boolean {
   return (
     !player ||
@@ -1047,11 +1065,7 @@ function getStateAwareJumpCue(
       cueWindow.endDistance - speed * LANDING_RESPONSE_SECONDS
     ) {
       return landingDistance >= cueWindow.startDistance
-        ? {
-            key: cueKey,
-            kind: 'jump',
-            text: `先別在空中按跳，落地後立刻跳過${getJumpName(obstacle.type)}。`,
-          }
+        ? getLandFirstCue(cueKey, obstacle.type)
         : null;
     }
   }
@@ -1354,6 +1368,15 @@ export function getObstacleCue(
         currentDistance >= cueWindow.startDistance &&
         currentDistance < cueWindow.endDistance
       ) {
+        // The follow-ups `getStateAwareJumpCue` answers with the airborne
+        // land-first cue keep that cue after touchdown.
+        if (
+          jumpIndex > 0 &&
+          (jumpType === 'gap' ||
+            section.followupJumps[jumpIndex - 1] === 'gap')
+        ) {
+          return getLandFirstCue(jumpCueKey, jumpType);
+        }
         return getJumpCue(
           jumpCueKey,
           jumpType,

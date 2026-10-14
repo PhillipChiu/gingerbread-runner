@@ -1,9 +1,12 @@
+/// <reference types="node" />
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   advanceGame,
   applyPlayerAction,
   createGameState,
   CUSTOM_GAME_TUNING,
+  getDoubleJumpStatus,
   getRunSpeed,
   GROUND_Y,
   isPlayerSliding,
@@ -12,6 +15,7 @@ import {
   PLAYER_CENTER_X,
   PLAYER_WIDTH,
   PLAYER_X,
+  toGameSnapshot,
   WORLD_HEIGHT,
   type GameState,
   type PlayerState,
@@ -2276,13 +2280,17 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
     },
   );
 
-  // Jumping the first stump late lands too late for a ground jump over the gap,
-  // so the gap is cleared with the second jump and the stump after it with a
-  // ground jump after landing.
+  // Jumping the first stump late lands deep inside the gap's ground-jump
+  // window. The gap's cue is already on screen while the runner is still in the
+  // air, telling them to land first and jump right away, so the 200 ms is
+  // spent before touchdown instead of inside a window that is only about
+  // 285 ms long.
   it.each(CUE_FRAME_RATES)(
-    'clears them when the first stump is jumped late and the gap needs the second jump at %s',
+    'clears them when the first stump is jumped late and the gap is jumped right after landing at %s',
     (_label, frameSeconds) => {
-      const lateFirstJump = { firstJumpFromDistance: firstStump.contactDistance - 56 };
+      const lateFirstJump = {
+        firstJumpFromDistance: firstStump.contactDistance - 70,
+      };
 
       expect(
         findFailures(frameSeconds, [REACTION_SECONDS], lateFirstJump),
@@ -2303,22 +2311,590 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
         'the first three jump presses, in order',
       ).toEqual([
         { key: `${section.id}:jump-1`, kind: 'jump', jumpsUsed: 0 },
-        {
-          key: `${section.id}:jump-2:second`,
-          kind: 'doubleJump',
-          jumpsUsed: 1,
-        },
+        { key: `${section.id}:jump-2`, kind: 'jump', jumpsUsed: 0 },
         { key: `${section.id}:jump-3`, kind: 'jump', jumpsUsed: 0 },
       ]);
-      // Both jumps are gone by then, so the cue for the trailing stump has to
-      // be on screen while the runner is still in the air: "land, then jump".
       expect(
-        route.cueWindows.find(({ key }) => key === `${section.id}:jump-3`)
+        route.cueWindows.find(({ key }) => key === `${section.id}:jump-2`)
           ?.appearedWithJumpsUsed,
-        'the trailing stump cue is already showing with both jumps spent',
-      ).toBe(2);
+        'the gap cue is already showing while the runner is in the air',
+      ).toBe(1);
     },
   );
+
+  // The cues as the screen delivers them. `GameCanvas` does not show the runner
+  // a fresh cue every frame: it sends the UI a snapshot at most every 120 ms, or
+  // at once when the double-jump status changes (takeoff, second jump, landing),
+  // and `App` prints that snapshot's `cue.text`. A runner can only answer what
+  // they can read, so the routes below start the reaction clock when a cue's
+  // words first reach the screen, and decide what to press from those words and
+  // from whether the runner is on the ground or in the air, never from where the
+  // obstacles are. The first press can come no sooner than the next frame after
+  // the words appear, and nothing is buffered.
+  const SNAPSHOT_INTERVAL_SECONDS = 0.12;
+
+  // The words that ask the runner to press jump. "Don't jump in the air, jump
+  // right after landing" is a press from the ground.
+  const GROUND_JUMP_TEXT =
+    /^(?:現在跳過|現在放開滑行並跳過|先別在空中按跳，落地後立刻跳過)(?:樹樁|裂隙)。$/;
+  const AIR_JUMP_TEXT = /^空中再按一次二段跳，越過(?:樹樁|裂隙)。$/;
+
+  /** Frames in one 120 ms refresh, so also how many places it can fall. */
+  function framesPerSnapshot(frameSeconds: number): number {
+    return Math.ceil(SNAPSHOT_INTERVAL_SECONDS / frameSeconds - REACTION_EPSILON);
+  }
+
+  function isRunnerInAir(player: PlayerState): boolean {
+    return player.jumpHeight > 0 || player.jumpVelocity !== 0;
+  }
+
+  interface ScreenCue {
+    key: string;
+    kind: ObstacleCue['kind'];
+    text: string;
+    /** Seconds into the route when these words reached the screen. */
+    shownAtSeconds: number;
+    /** Seconds into the route of the last snapshot that still carried them. */
+    lastSnapshotAtSeconds: number;
+    /** When the runner pressed jump for these words, if they did. */
+    pressedAtSeconds: number | null;
+    pressedInAir: boolean | null;
+  }
+
+  interface FollowingProbe {
+    text: string;
+    /** `type@contactDistance` of the obstacle that was hit, if one was. */
+    struck: string | null;
+  }
+
+  interface ScreenRoute {
+    /** Every jump instruction that reached the screen, in order. */
+    cues: ScreenCue[];
+    /** `type@contactDistance` of every obstacle the runner collided with. */
+    collisions: string[];
+    /** Words that contradict what the runner can see of their own state. */
+    misleading: string[];
+    /** One per jump cue made, when `probeFollowing` is on. */
+    probes: FollowingProbe[];
+    final: GameState;
+  }
+
+  interface ScreenRouteOptions {
+    /** Slides the frame grid by a fraction of a frame (0 <= phase < 1). */
+    framePhase: number;
+    /** Frames since the last snapshot when the route starts. */
+    snapshotPhase: number;
+    /** Frames a snapshot takes to get from `GameCanvas` onto the screen. */
+    displayDelayFrames?: number;
+    /** Also play every jump cue on from the moment it was made. */
+    probeFollowing?: boolean;
+  }
+
+  /** Why these words would mislead a runner in this state; null if they would not. */
+  function findMisleadingCue(
+    cue: ObstacleCue | null,
+    player: PlayerState,
+  ): string | null {
+    if (!cue) {
+      return null;
+    }
+
+    const asksGroundJump = GROUND_JUMP_TEXT.test(cue.text);
+    const asksAirJump = AIR_JUMP_TEXT.test(cue.text);
+    if (
+      asksGroundJump !== (cue.kind === 'jump') ||
+      asksAirJump !== (cue.kind === 'doubleJump')
+    ) {
+      return `a ${cue.kind} cue that reads "${cue.text}"`;
+    }
+
+    const inAir = isRunnerInAir(player);
+    if (asksGroundJump && inAir && !cue.text.startsWith('先別在空中按跳')) {
+      return `"${cue.text}" while the runner is still in the air`;
+    }
+    if (asksAirJump && (!inAir || player.jumpsUsed !== 1)) {
+      return `"${cue.text}" with no second jump to spend`;
+    }
+    return null;
+  }
+
+  /**
+   * Plays the real engine on from the moment `cue` was made and does what its
+   * words say at once: press jump now if they ask for a jump from where the
+   * runner is, or wait for touchdown first if the runner is still in the air and
+   * the words say to land first. Reports the obstacle it hit, if any, before the
+   * runner is past the one the cue names.
+   */
+  function probeFollowingWords(
+    level: (typeof LEVELS)[number],
+    section: ExpandedSlideSection,
+    from: GameState,
+    cue: ObstacleCue,
+    frameSeconds: number,
+  ): FollowingProbe {
+    const { obstacles } = expandObstaclePattern(level);
+    const named = obstacles.find(
+      (obstacle) =>
+        obstacle.patternId === section.id &&
+        obstacle.patternRole === 'followup' &&
+        obstacle.patternIndex === Number(/:jump-(\d+)/.exec(cue.key)?.[1]),
+    )!;
+    const passedAt =
+      named.contactDistance + named.width + PLAYER_COLLISION_WIDTH;
+    const passiveDrain =
+      CUSTOM_GAME_TUNING.passiveEnergyDrainPerSecond * frameSeconds;
+    const asksAirJump = AIR_JUMP_TEXT.test(cue.text);
+    let state = from;
+    let pressed = false;
+
+    while (state.status === 'running' && state.distance < passedAt) {
+      if (!pressed && isRunnerInAir(state.player) === asksAirJump) {
+        state = applyPlayerAction(state, 'jump');
+        pressed = true;
+      }
+      const energyBefore = state.energy;
+      state = advanceGame(state, frameSeconds, () => 0.9);
+      if (state.energy < energyBefore - passiveDrain - REACTION_EPSILON) {
+        const struck =
+          obstacles.find(
+            (obstacle) =>
+              obstacle.contactDistance < state.distance &&
+              state.distance <
+                obstacle.contactDistance +
+                  obstacle.width +
+                  PLAYER_COLLISION_WIDTH,
+          ) ?? named;
+        return {
+          text: cue.text,
+          struck: `${struck.type}@${struck.contactDistance}`,
+        };
+      }
+    }
+
+    return { text: cue.text, struck: null };
+  }
+
+  /**
+   * Plays the real cue -> snapshot -> input -> physics loop like a runner who
+   * reads the cue text off the screen and needs `reactionSeconds` to answer it.
+   * Snapshots are taken the way `GameCanvas` takes them, with the real
+   * `toGameSnapshot`, and the clock starts when the words on screen change; a
+   * press is made on the first frame the clock has run out, the words still ask
+   * for it and the runner's own state allows it. `snapshotPhase` and
+   * `framePhase` slide the 120 ms refresh and the frame grid against the
+   * obstacles, so a pass does not depend on a lucky alignment.
+   */
+  function followScreenCues(
+    level: (typeof LEVELS)[number],
+    section: ExpandedSlideSection,
+    frameSeconds: number,
+    startingEnergy: number,
+    reactionSeconds: number,
+    {
+      framePhase,
+      snapshotPhase,
+      displayDelayFrames = 0,
+      probeFollowing = false,
+    }: ScreenRouteOptions,
+  ): ScreenRoute {
+    const { obstacles } = expandObstaclePattern(level);
+    const startDistance =
+      section.lastArchClearDistance +
+      framePhase *
+        frameSeconds *
+        getRunSpeed(level, section.lastArchClearDistance);
+    let state: GameState = {
+      ...createGameState(level),
+      distance: startDistance,
+      energy: startingEnergy,
+      nextScheduledObstacleIndex: obstacles.findIndex(
+        (obstacle) =>
+          obstacle.contactDistance +
+            obstacle.width +
+            PLAYER_COLLISION_WIDTH >
+          startDistance,
+      ),
+      nextPickupIn: Number.POSITIVE_INFINITY,
+    };
+    const passiveDrain =
+      CUSTOM_GAME_TUNING.passiveEnergyDrainPerSecond * frameSeconds;
+    const cues: ScreenCue[] = [];
+    const collisions: string[] = [];
+    const misleading = new Set<string>();
+    const probes: FollowingProbe[] = [];
+    const inTransit: { visibleAtFrame: number; cue: ObstacleCue | null }[] = [];
+    let lastSnapshotAt = -snapshotPhase * frameSeconds;
+    let lastSnapshotStatus = getDoubleJumpStatus(state.player);
+    let wordsOnScreen = '';
+    let onScreen = null as ScreenCue | null;
+    let answered = false;
+
+    for (
+      let frame = 1;
+      state.status === 'running' &&
+      state.distance < section.finalFollowupClearDistance;
+      frame += 1
+    ) {
+      // The runner acts on the state the last frame ended in.
+      const seconds = (frame - 1) * frameSeconds;
+      const inAir = isRunnerInAir(state.player);
+      if (
+        onScreen &&
+        !answered &&
+        seconds - onScreen.shownAtSeconds >=
+          reactionSeconds - REACTION_EPSILON &&
+        (AIR_JUMP_TEXT.test(onScreen.text)
+          ? inAir
+          : !inAir && !state.player.slideHeld)
+      ) {
+        onScreen.pressedAtSeconds = seconds;
+        onScreen.pressedInAir = inAir;
+        answered = true;
+        state = applyPlayerAction(state, 'jump');
+      }
+
+      const energyBefore = state.energy;
+      state = advanceGame(state, frameSeconds, () => 0.9);
+      if (state.energy < energyBefore - passiveDrain - REACTION_EPSILON) {
+        const struck = obstacles.find(
+          (obstacle) =>
+            obstacle.contactDistance < state.distance &&
+            state.distance <
+              obstacle.contactDistance + obstacle.width + PLAYER_COLLISION_WIDTH,
+        );
+        collisions.push(
+          struck
+            ? `${struck.type}@${struck.contactDistance}`
+            : `unknown@${state.distance}`,
+        );
+      }
+
+      const now = frame * frameSeconds;
+      const doubleJumpStatus = getDoubleJumpStatus(state.player);
+      if (
+        state.status === 'running' &&
+        (now - lastSnapshotAt >= SNAPSHOT_INTERVAL_SECONDS - REACTION_EPSILON ||
+          doubleJumpStatus !== lastSnapshotStatus)
+      ) {
+        const { cue } = toGameSnapshot(state);
+        lastSnapshotAt = now;
+        lastSnapshotStatus = doubleJumpStatus;
+        const complaint = findMisleadingCue(cue, state.player);
+        if (complaint) {
+          misleading.add(complaint);
+        }
+        if (probeFollowing && cue && (cue.kind === 'jump' || cue.kind === 'doubleJump')) {
+          probes.push(
+            probeFollowingWords(level, section, state, cue, frameSeconds),
+          );
+        }
+        inTransit.push({ visibleAtFrame: frame + displayDelayFrames, cue });
+      }
+
+      while (inTransit.length > 0 && inTransit[0]!.visibleAtFrame <= frame) {
+        const { cue } = inTransit.shift()!;
+        const words = cue?.text ?? '';
+        if (words !== wordsOnScreen) {
+          wordsOnScreen = words;
+          answered = false;
+          onScreen =
+            cue &&
+            (GROUND_JUMP_TEXT.test(words) || AIR_JUMP_TEXT.test(words))
+              ? {
+                  key: cue.key,
+                  kind: cue.kind,
+                  text: words,
+                  shownAtSeconds: now,
+                  lastSnapshotAtSeconds: now,
+                  pressedAtSeconds: null,
+                  pressedInAir: null,
+                }
+              : null;
+          if (onScreen) {
+            cues.push(onScreen);
+          }
+        } else if (onScreen) {
+          onScreen.lastSnapshotAtSeconds = now;
+        }
+      }
+    }
+
+    return {
+      cues,
+      collisions,
+      misleading: [...misleading],
+      probes,
+      final: state,
+    };
+  }
+
+  /** What went wrong on a screen route beyond `listRouteProblems`. */
+  function listScreenProblems(
+    route: ScreenRoute,
+    section: ExpandedSlideSection,
+    reactionSeconds: number,
+  ): string[] {
+    const problems = listRouteProblems(route, section);
+    if (
+      route.cues.some(
+        ({ pressedAtSeconds, shownAtSeconds }) =>
+          pressedAtSeconds !== null &&
+          pressedAtSeconds - shownAtSeconds < reactionSeconds - REACTION_EPSILON,
+      )
+    ) {
+      problems.push('pressed before the reaction clock ran out');
+    }
+    section.followupJumps.forEach((_type, index) => {
+      const answered = route.cues.some(
+        ({ key, pressedAtSeconds }) =>
+          pressedAtSeconds !== null &&
+          (key === `${section.id}:jump-${index + 1}` ||
+            key === `${section.id}:jump-${index + 1}:second`),
+      );
+      if (!answered) {
+        problems.push(`obstacle ${index + 1} was never answered with a jump`);
+      }
+    });
+    return problems;
+  }
+
+  /** Words that mislead, or that hit the obstacle they name if followed at once. */
+  function listWordProblems(route: ScreenRoute): string[] {
+    return [
+      ...route.misleading,
+      ...route.probes
+        .filter(({ struck }) => struck !== null)
+        .map(({ text, struck }) => `following "${text}" at once hits ${struck}`),
+    ];
+  }
+
+  describe('as the screen delivers the cues', () => {
+    // The 200 ms bar itself is also run on a frame grid four times finer than
+    // `FRAME_PHASES`, so it does not rest on eight lucky alignments.
+    const DENSE_FRAME_PHASES = Array.from(
+      { length: 32 },
+      (_, index) => index / 32,
+    );
+
+    function scan(
+      scanned: (typeof LEVELS)[number],
+      frameSeconds: number,
+      reactionSeconds: readonly number[],
+      options: Pick<ScreenRouteOptions, 'displayDelayFrames' | 'probeFollowing'> & {
+        framePhases?: readonly number[];
+      } = {},
+      check: (
+        route: ScreenRoute,
+        scannedSection: ExpandedSlideSection,
+        reaction: number,
+      ) => string[] = listScreenProblems,
+    ) {
+      const { framePhases = FRAME_PHASES, ...routeOptions } = options;
+      const scannedSection = expandObstaclePattern(scanned).sections[2]!;
+      const failures: {
+        reactionMs: number;
+        framePhase: number;
+        snapshotPhase: number;
+        problems: string[];
+      }[] = [];
+      let scenarios = 0;
+      for (const reaction of reactionSeconds) {
+        for (const framePhase of framePhases) {
+          for (
+            let snapshotPhase = 0;
+            snapshotPhase < framesPerSnapshot(frameSeconds);
+            snapshotPhase += 1
+          ) {
+            const route = followScreenCues(
+              scanned,
+              scannedSection,
+              frameSeconds,
+              LOW_ENERGY,
+              reaction,
+              { ...routeOptions, framePhase, snapshotPhase },
+            );
+            const problems = check(route, scannedSection, reaction);
+            scenarios += 1;
+            if (problems.length > 0) {
+              failures.push({
+                reactionMs: Math.round(reaction * 1000),
+                framePhase,
+                snapshotPhase,
+                problems,
+              });
+            }
+          }
+        }
+      }
+      return { scenarios, failures };
+    }
+
+    const expectedScenarios = (
+      frameSeconds: number,
+      reactionSeconds: readonly number[],
+      framePhases: readonly number[] = FRAME_PHASES,
+    ) =>
+      reactionSeconds.length *
+      framePhases.length *
+      framesPerSnapshot(frameSeconds);
+
+    it('is driven by the snapshot refresh GameCanvas really uses', () => {
+      const source = readFileSync(
+        new URL('../components/GameCanvas.tsx', import.meta.url),
+        'utf8',
+      );
+
+      expect(source).toMatch(/now\s*-\s*lastSnapshotAt\s*>=\s*120\b/);
+      expect(source).toMatch(
+        /lastSnapshotDoubleJumpStatus\s*!==\s*doubleJumpStatus/,
+      );
+      expect(source).toMatch(/onSnapshot\(toGameSnapshot\(state\)\)/);
+      expect(
+        CUE_FRAME_RATES.map(([, frameSeconds]) => framesPerSnapshot(frameSeconds)),
+        'frames per 120 ms refresh at 240, 144, 120, 60, 30 and 20 Hz',
+      ).toEqual([29, 18, 15, 8, 4, 3]);
+    });
+
+    it.each(CUE_FRAME_RATES)(
+      'clears all three obstacles from low energy when every jump waits 200 ms after its words reach the screen at %s',
+      (_label, frameSeconds) => {
+        const { scenarios, failures } = scan(
+          level,
+          frameSeconds,
+          [REACTION_SECONDS],
+          { framePhases: DENSE_FRAME_PHASES },
+        );
+
+        expect(scenarios).toBe(
+          expectedScenarios(frameSeconds, [REACTION_SECONDS], DENSE_FRAME_PHASES),
+        );
+        expect(failures.slice(0, 3), `${failures.length} failing`).toEqual([]);
+      },
+      30_000,
+    );
+
+    it.each(CUE_FRAME_RATES)(
+      'still clears them when every jump waits up to 250 ms after its words reach the screen at %s',
+      (_label, frameSeconds) => {
+        const { scenarios, failures } = scan(
+          level,
+          frameSeconds,
+          SLOWER_REACTION_SECONDS,
+        );
+
+        expect(scenarios).toBe(
+          expectedScenarios(frameSeconds, SLOWER_REACTION_SECONDS),
+        );
+        expect(failures.slice(0, 3), `${failures.length} failing`).toEqual([]);
+      },
+      20_000,
+    );
+
+    it.each(CUE_FRAME_RATES)(
+      'still clears them at 200 ms when the words reach the screen one frame late at %s',
+      (_label, frameSeconds) => {
+        const { failures } = scan(level, frameSeconds, [REACTION_SECONDS], {
+          displayDelayFrames: 1,
+          framePhases: DENSE_FRAME_PHASES,
+        });
+
+        expect(failures.slice(0, 3), `${failures.length} failing`).toEqual([]);
+      },
+      30_000,
+    );
+
+    it.each(CUE_FRAME_RATES)(
+      'jumps each obstacle from the ground, in order, no sooner than 200 ms after its words appeared at %s',
+      (_label, frameSeconds) => {
+        for (const snapshotPhase of [
+          0,
+          Math.floor(framesPerSnapshot(frameSeconds) / 2),
+          framesPerSnapshot(frameSeconds) - 1,
+        ]) {
+          const route = followScreenCues(
+            level,
+            section,
+            frameSeconds,
+            LOW_ENERGY,
+            REACTION_SECONDS,
+            { framePhase: 0, snapshotPhase },
+          );
+          const pressed = route.cues.filter(
+            ({ pressedAtSeconds }) => pressedAtSeconds !== null,
+          );
+
+          expect(
+            pressed.slice(0, 3).map(({ key, kind, pressedInAir }) => ({
+              key,
+              kind,
+              pressedInAir,
+            })),
+            `the first three presses, snapshot phase ${snapshotPhase}`,
+          ).toEqual(
+            [1, 2, 3].map((number) => ({
+              key: `${section.id}:jump-${number}`,
+              kind: 'jump',
+              pressedInAir: false,
+            })),
+          );
+          for (const { text, shownAtSeconds, pressedAtSeconds } of pressed) {
+            expect(
+              pressedAtSeconds! - shownAtSeconds,
+              `"${text}" answered after this many seconds`,
+            ).toBeGreaterThanOrEqual(REACTION_SECONDS - REACTION_EPSILON);
+          }
+        }
+      },
+    );
+
+    it.each(CUE_FRAME_RATES)(
+      'only shows words that are true of the runner and safe to follow the moment they appear at %s',
+      (_label, frameSeconds) => {
+        const { scenarios, failures } = scan(
+          level,
+          frameSeconds,
+          [REACTION_SECONDS],
+          { probeFollowing: true },
+          (route) => listWordProblems(route),
+        );
+
+        expect(scenarios).toBe(expectedScenarios(frameSeconds, [REACTION_SECONDS]));
+        expect(failures.slice(0, 3), `${failures.length} failing`).toEqual([]);
+      },
+      20_000,
+    );
+
+    // Without this the scan could pass because nothing ever goes wrong in it.
+    // The spacing this section had before the change is what QC's displayed-cue
+    // follower hit the gap on, at every rate.
+    it.each(CUE_FRAME_RATES)(
+      'hits the gap on the section 3 spacing it replaces at %s',
+      (_label, frameSeconds) => {
+        const oldSpacing = {
+          ...level,
+          obstaclePattern: {
+            ...level.obstaclePattern,
+            slideSections: level.obstaclePattern.slideSections.map(
+              (slideSection, index) =>
+                index === 2
+                  ? { ...slideSection, jumpPairClearancePx: 225 }
+                  : slideSection,
+            ),
+          },
+        };
+        const { failures } = scan(oldSpacing, frameSeconds, [REACTION_SECONDS]);
+
+        expect(failures.length).toBeGreaterThan(0);
+        expect(
+          failures.every(({ problems }) =>
+            problems.some((problem) => problem.startsWith('collided with gap@11225')),
+          ),
+          'every failure is the gap',
+        ).toBe(true);
+      },
+      20_000,
+    );
+  });
 });
 
 // Same root cause, mirrored: once a single jump already clears the gap, the
@@ -2537,10 +3113,11 @@ describe('level 11 cues that say to jump right after landing', () => {
             toldToWait += 1;
             if (
               groundedCue?.key !== airborneCue.key ||
-              groundedCue.kind !== airborneCue.kind
+              groundedCue.kind !== airborneCue.kind ||
+              groundedCue.text !== airborneCue.text
             ) {
               stale.push(
-                `${section.id} jump ${index + 1} from ${takeoff}: told ${airborneCue.key} in the air, then ${groundedCue ? `${groundedCue.key}|${groundedCue.kind}` : 'nothing'}`,
+                `${section.id} jump ${index + 1} from ${takeoff}: told "${airborneCue.text}" (${airborneCue.key}) in the air, then ${groundedCue ? `"${groundedCue.text}" (${groundedCue.key}|${groundedCue.kind})` : 'nothing'}`,
               );
             }
           }
@@ -2565,7 +3142,7 @@ describe('level 11 follow-up schedule with the wider section 3 spacing', () => {
     );
 
   it('widens only section 3 of level 11; every other level keeps one spacing', () => {
-    expect(spacingOf(level)).toEqual([95, 95, 225, 95]);
+    expect(spacingOf(level)).toEqual([95, 95, 268, 95]);
     for (const other of LEVELS.filter(({ id }) => id !== level.id)) {
       expect(new Set(spacingOf(other)).size, `level ${other.id}`).toBe(1);
     }
@@ -2597,7 +3174,7 @@ describe('level 11 follow-up schedule with the wider section 3 spacing', () => {
     ).toEqual([
       [3667, 3879],
       [7261, 7503],
-      [10883, 11225, 11597],
+      [10883, 11268, 11683],
       [14477],
     ]);
     expect(
@@ -2643,6 +3220,14 @@ describe('level 11 follow-up schedule with the wider section 3 spacing', () => {
         ).toBe(next.firstArchContactDistance);
       }
     });
+
+    // The wider section 3 pushes its end towards section 4's preview, so check
+    // there is still room for the recovery cue in between.
+    const third = sections[2]!;
+    expect(
+      getObstacleCue(level, third.finalFollowupClearDistance + 1),
+      'recovery cue after the trailing stump',
+    ).toMatchObject({ key: `${third.id}:recovery`, kind: 'recovery' });
 
     const last = sections.at(-1)!;
     expect(
