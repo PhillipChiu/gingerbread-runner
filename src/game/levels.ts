@@ -101,8 +101,8 @@ const ADVANCED_LEVEL_DESIGNS: readonly AdvancedLevelDesign[] = [
     // in it for that wait, a render frame and a frame of rounding to fit.
     // 370 px (+275 over the 95 px base, +102 over the 268 px this had) is the
     // narrowest spacing at which that holds at every supported frame rate and
-    // frame/refresh phase, with a two-frame landing allowance, a one-frame
-    // display delay, and a first jump taken as late as 50 px before the stump
+    // frame/refresh phase, with a first stump jumped up to 250 ms after its
+    // words appear, a two-frame landing allowance and a one-frame display delay
     // (see the "as the screen delivers the cues" tests in engine.test.ts).
     sectionPairGapPx: { 2: 370 },
     archCount: 8,

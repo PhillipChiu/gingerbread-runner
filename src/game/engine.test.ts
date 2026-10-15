@@ -1816,6 +1816,36 @@ interface FollowedCueRoute {
   final: GameState;
 }
 
+// What the words of a jump cue ask of the runner. Every follower below reads a
+// cue through these and through whether the runner is on the ground or in the
+// air, the two things a player can see. A cue's key and kind are never on
+// screen and where an obstacle is can only be guessed at, so none of them
+// decides when a press is made.
+const GO_ON_GROUND_TEXT = /^現在(?:放開滑行並)?跳過(?:樹樁|裂隙)。$/;
+const GO_IN_AIR_TEXT = /^空中再按一次二段跳，越過(?:樹樁|裂隙)。$/;
+const WAIT_IN_AIR_TEXT = /^先別在空中按跳，落地後等提示，再跳過(?:樹樁|裂隙)。$/;
+const WAIT_ON_GROUND_TEXT = /^前方(?:樹樁|裂隙)，準備跳躍；稍後依提示起跳。$/;
+
+type WordsAsk =
+  | 'go-on-ground'
+  | 'go-in-air'
+  | 'wait-in-air'
+  | 'wait-on-ground'
+  | 'other';
+
+function readWords(text: string): WordsAsk {
+  if (GO_ON_GROUND_TEXT.test(text)) {
+    return 'go-on-ground';
+  }
+  if (GO_IN_AIR_TEXT.test(text)) {
+    return 'go-in-air';
+  }
+  if (WAIT_IN_AIR_TEXT.test(text)) {
+    return 'wait-in-air';
+  }
+  return WAIT_ON_GROUND_TEXT.test(text) ? 'wait-on-ground' : 'other';
+}
+
 function canTakeJumpCue(
   cue: ObstacleCue | null,
   player: PlayerState,
@@ -1824,7 +1854,8 @@ function canTakeJumpCue(
     return false;
   }
 
-  if (cue.kind === 'jump') {
+  const asks = readWords(cue.text);
+  if (asks === 'go-on-ground') {
     return (
       player.jumpHeight === 0 &&
       player.jumpVelocity === 0 &&
@@ -1833,9 +1864,7 @@ function canTakeJumpCue(
   }
 
   return (
-    cue.kind === 'doubleJump' &&
-    player.jumpHeight > 0 &&
-    player.jumpsUsed === 1
+    asks === 'go-in-air' && player.jumpHeight > 0 && player.jumpsUsed === 1
   );
 }
 
@@ -1921,14 +1950,10 @@ function followEveryJumpCue(
 const REACTION_SECONDS = 0.2;
 const REACTION_EPSILON = 1e-9;
 
-// What a runner in the air, or just back on the ground, is told when the jump
-// they are on already clears the obstacle it was for and the next one has to
-// be jumped from the ground: don't press in the air, jump after landing.
-const LAND_FIRST_TEXT = /^先別在空中按跳，落地後再跳過(?:樹樁|裂隙)。$/;
-
 interface ReactionPress {
   key: string;
   kind: ObstacleCue['kind'];
+  text: string;
   /** Seconds the cue had been on screen, counted from its first frame. */
   secondsSinceCueAppeared: number;
   distance: number;
@@ -1938,6 +1963,7 @@ interface ReactionPress {
 interface ReactionCueWindow {
   key: string;
   kind: ObstacleCue['kind'];
+  text: string;
   appearedAtSeconds: number;
   lastSeenAtSeconds: number;
   /** Jumps already spent on the cue's first frame; above 0 means still in the air. */
@@ -1957,20 +1983,25 @@ interface ReactionRoute {
 interface ReactionRouteOptions {
   /** Slides the frame grid by a fraction of a frame (0 <= phase < 1). */
   framePhase?: number;
-  /** Holds the first jump back until the runner has reached this distance. */
-  firstJumpFromDistance?: number;
+  /**
+   * How long the runner takes over the first jump of the section, for a runner
+   * who is slow to start; every jump after it takes `reactionSeconds`.
+   */
+  firstReactionSeconds?: number;
 }
 
 /**
  * Plays the real cue -> input -> physics loop like a runner who needs
  * `reactionSeconds` to answer a cue. The clock for a jump cue starts on the
- * first frame it is on screen (a cue with a different key or kind starts a new
- * one) and the jump is pressed on the first frame the cue is still showing, the
- * clock has run out and the press can actually take effect. Nothing is
- * buffered: a press that cannot be taken the moment it is made is not made, and
- * a cue that leaves the screen before the clock runs out is never answered.
- * `framePhase` slides the start by a fraction of a frame, so a pass does not
- * depend on how the frame grid happens to line up with the cue windows.
+ * first frame its words are on screen (words that ask for something else start
+ * a new one) and the jump is pressed on the first frame the cue is still
+ * showing, the clock has run out and the press can actually take effect.
+ * Nothing is buffered: a press that cannot be taken the moment it is made is
+ * not made, and a cue that leaves the screen before the clock runs out is never
+ * answered. Only words that ask for a press are answered, so "wait" words are
+ * never a reason to jump. `framePhase` slides the start by a fraction of a
+ * frame, so a pass does not depend on how the frame grid happens to line up
+ * with the cue windows.
  */
 function followCuesWithReactionDelay(
   level: (typeof LEVELS)[number],
@@ -1978,7 +2009,10 @@ function followCuesWithReactionDelay(
   frameSeconds: number,
   startingEnergy: number,
   reactionSeconds: number,
-  { framePhase = 0, firstJumpFromDistance }: ReactionRouteOptions = {},
+  {
+    framePhase = 0,
+    firstReactionSeconds = reactionSeconds,
+  }: ReactionRouteOptions = {},
 ): ReactionRoute {
   const { obstacles } = expandObstaclePattern(level);
   const startDistance =
@@ -2014,16 +2048,18 @@ function followCuesWithReactionDelay(
   ) {
     const seconds = frame * frameSeconds;
     const cue = getObstacleCue(level, state.distance, state.player);
+    const asks = cue ? readWords(cue.text) : 'other';
     const jumpCue =
-      cue && (cue.kind === 'jump' || cue.kind === 'doubleJump') ? cue : null;
+      cue && (asks === 'go-on-ground' || asks === 'go-in-air') ? cue : null;
 
     if (!jumpCue) {
       showing = null;
     } else {
-      if (showing?.key !== jumpCue.key || showing.kind !== jumpCue.kind) {
+      if (showing?.key !== jumpCue.key || showing.text !== jumpCue.text) {
         showing = {
           key: jumpCue.key,
           kind: jumpCue.kind,
+          text: jumpCue.text,
           appearedAtSeconds: seconds,
           lastSeenAtSeconds: seconds,
           appearedWithJumpsUsed: state.player.jumpsUsed,
@@ -2033,16 +2069,16 @@ function followCuesWithReactionDelay(
       showing.lastSeenAtSeconds = seconds;
 
       const waited = seconds - showing.appearedAtSeconds;
+      const needed =
+        presses.length === 0 ? firstReactionSeconds : reactionSeconds;
       if (
-        waited >= reactionSeconds - REACTION_EPSILON &&
-        canTakeJumpCue(jumpCue, state.player) &&
-        (presses.length > 0 ||
-          firstJumpFromDistance === undefined ||
-          state.distance >= firstJumpFromDistance)
+        waited >= needed - REACTION_EPSILON &&
+        canTakeJumpCue(jumpCue, state.player)
       ) {
         presses.push({
           key: jumpCue.key,
           kind: jumpCue.kind,
+          text: jumpCue.text,
           secondsSinceCueAppeared: waited,
           distance: state.distance,
           jumpsUsed: state.player.jumpsUsed,
@@ -2121,12 +2157,32 @@ describe('level 11 section 3 stump -> gap -> stump cue route', () => {
       expect.soft(
         route.jumps
           .slice(0, 3)
-          .map(({ key, kind, jumpsUsed }) => ({ key, kind, jumpsUsed })),
+          .map(({ key, kind, text, jumpsUsed }) => ({
+            key,
+            kind,
+            text,
+            jumpsUsed,
+          })),
         'the first three jump presses, in order',
       ).toEqual([
-        { key: `${section.id}:jump-1`, kind: 'jump', jumpsUsed: 0 },
-        { key: `${section.id}:jump-2`, kind: 'jump', jumpsUsed: 0 },
-        { key: `${section.id}:jump-3`, kind: 'jump', jumpsUsed: 0 },
+        {
+          key: `${section.id}:jump-1`,
+          kind: 'jump',
+          text: '現在跳過樹樁。',
+          jumpsUsed: 0,
+        },
+        {
+          key: `${section.id}:jump-2`,
+          kind: 'jump',
+          text: '現在跳過裂隙。',
+          jumpsUsed: 0,
+        },
+        {
+          key: `${section.id}:jump-3`,
+          kind: 'jump',
+          text: '現在跳過樹樁。',
+          jumpsUsed: 0,
+        },
       ]);
       expect.soft(
         route.jumps[1]?.distance,
@@ -2170,7 +2226,7 @@ describe('level 11 section 3 stump -> gap -> stump cue route', () => {
         distance += 0.25
       ) {
         const cue = getObstacleCue(level, distance, grounded);
-        if (cue?.key === key && cue.kind === 'jump') {
+        if (cue?.key === key && readWords(cue.text) === 'go-on-ground') {
           shownDistance += 0.25;
         }
       }
@@ -2244,12 +2300,8 @@ function listReactionProblems(
 
 describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay', () => {
   const level = LEVELS[10]!;
-  const { obstacles, sections } = expandObstaclePattern(level);
+  const { sections } = expandObstaclePattern(level);
   const section = sections[2]!;
-  const firstStump = obstacles.find(
-    (obstacle) =>
-      obstacle.patternId === section.id && obstacle.patternRole === 'followup',
-  )!;
 
   function findFailures(
     frameSeconds: number,
@@ -2281,19 +2333,15 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
     },
   );
 
-  // Jumping the first stump late lands deep inside the gap's ground-jump
-  // window. Words telling the runner to land first can be up while they are
-  // still in the air, but they are `prepare` words until that window opens, and
-  // this follower only presses for `jump` words, so it sees the gap's cue for
-  // the first time on the ground. The window is still open for its 200 ms by
-  // then. The screen-level routes below are the ones that act on the words in
-  // the air, from the moment the runner has landed.
+  // A slow first jump, up to 320 ms after the stump's words appear, lands deep
+  // in the gap's approach. The runner is told not to press in the air, is then
+  // on the ground with the "get ready" words up, and the jump is the next thing
+  // asked for. The screen-level routes below are the ones that add the delay
+  // the 120 ms snapshot refresh puts in front of every one of these words.
   it.each(CUE_FRAME_RATES)(
     'clears them when the first stump is jumped late and the gap is jumped from the ground at %s',
     (_label, frameSeconds) => {
-      const lateFirstJump = {
-        firstJumpFromDistance: firstStump.contactDistance - 70,
-      };
+      const lateFirstJump = { firstReactionSeconds: 0.32 };
 
       expect(
         findFailures(frameSeconds, [REACTION_SECONDS], lateFirstJump),
@@ -2310,12 +2358,32 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
       expect(
         route.presses
           .slice(0, 3)
-          .map(({ key, kind, jumpsUsed }) => ({ key, kind, jumpsUsed })),
+          .map(({ key, kind, text, jumpsUsed }) => ({
+            key,
+            kind,
+            text,
+            jumpsUsed,
+          })),
         'the first three jump presses, in order',
       ).toEqual([
-        { key: `${section.id}:jump-1`, kind: 'jump', jumpsUsed: 0 },
-        { key: `${section.id}:jump-2`, kind: 'jump', jumpsUsed: 0 },
-        { key: `${section.id}:jump-3`, kind: 'jump', jumpsUsed: 0 },
+        {
+          key: `${section.id}:jump-1`,
+          kind: 'jump',
+          text: '現在跳過樹樁。',
+          jumpsUsed: 0,
+        },
+        {
+          key: `${section.id}:jump-2`,
+          kind: 'jump',
+          text: '現在跳過裂隙。',
+          jumpsUsed: 0,
+        },
+        {
+          key: `${section.id}:jump-3`,
+          kind: 'jump',
+          text: '現在跳過樹樁。',
+          jumpsUsed: 0,
+        },
       ]);
       expect(
         route.cueWindows.find(({ key }) => key === `${section.id}:jump-2`)
@@ -2329,19 +2397,23 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
   // a fresh cue every frame: it sends the UI a snapshot at most every 120 ms, or
   // at once when the double-jump status changes (takeoff, second jump, landing),
   // and `App` prints that snapshot's `cue.text`. A runner can only answer what
-  // they can read, so the routes below start the reaction clock when a cue's
-  // words first reach the screen, and decide what to press from those words and
-  // from whether the runner is on the ground or in the air, never from where the
-  // obstacles are. The first press can come no sooner than the next frame after
-  // the words appear, and nothing is buffered.
+  // they can read, so the routes below decide what to press from the words on
+  // screen and from whether the runner is visibly on the ground or in the air,
+  // never from a cue's key or kind, or from where the obstacles are. Nothing is
+  // buffered, and the first press can come no sooner than the next frame after
+  // what it answers appears.
+  //
+  // What each press answers:
+  // - words that say to jump now, from the ground: the first jump of the
+  //   section answers its words, so its 200 ms start when they reach the
+  //   screen. Every jump after a landing answers the landing: the 200 ms start
+  //   at the first frame the runner is drawn back on the ground, with
+  //   `landingRenderFrames` more for the render to show it, and the press is
+  //   made once the "jump now" words are up as well;
+  // - words that say to press again in the air: the 200 ms start when they
+  //   reach the screen;
+  // - words that say to wait: never pressed.
   const SNAPSHOT_INTERVAL_SECONDS = 0.12;
-
-  // The words that ask the runner to press jump. "Don't jump in the air, jump
-  // after landing" is a press from the ground, and the runner can only answer
-  // it once they have seen themselves land.
-  const GROUND_JUMP_TEXT =
-    /^(?:現在跳過|現在放開滑行並跳過|先別在空中按跳，落地後再跳過)(?:樹樁|裂隙)。$/;
-  const AIR_JUMP_TEXT = /^空中再按一次二段跳，越過(?:樹樁|裂隙)。$/;
 
   /** Frames in one 120 ms refresh, so also how many places it can fall. */
   function framesPerSnapshot(frameSeconds: number): number {
@@ -2353,25 +2425,26 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
   }
 
   interface ScreenCue {
+    /** What these words ask of the runner. */
+    asks: WordsAsk;
+    text: string;
+    /** For reports only: no press is decided from the key or the kind. */
     key: string;
     kind: ObstacleCue['kind'];
-    text: string;
     /** Seconds into the route when these words reached the screen. */
     shownAtSeconds: number;
-    /** Seconds into the route of the last snapshot that still carried them. */
-    lastSnapshotAtSeconds: number;
     /** When the runner pressed jump for these words, if they did. */
     pressedAtSeconds: number | null;
     pressedInAir: boolean | null;
-    /** How far along the level the runner was when they pressed. */
+    /** How far along the level the runner was when they pressed; reports only. */
     pressedAtDistance: number | null;
     /**
      * When the reaction clock the press waited on started: the words reaching
-     * the screen, or for "land first" the later of that and the runner's
-     * touchdown (plus the render allowance).
+     * the screen, or for a jump after a landing the first frame the runner was
+     * drawn back on the ground, plus the render allowance.
      */
     clockStartSeconds: number | null;
-    /** The runner's last visible touchdown before the press, if there was one. */
+    /** The visible touchdown the press answered, if it answered one. */
     landedAtSeconds: number | null;
   }
 
@@ -2382,13 +2455,13 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
   }
 
   interface ScreenRoute {
-    /** Every jump instruction that reached the screen, in order. */
+    /** Every words that asked for or against a jump and reached the screen, in order. */
     cues: ScreenCue[];
     /** `type@contactDistance` of every obstacle the runner collided with. */
     collisions: string[];
     /** Words that contradict what the runner can see of their own state. */
     misleading: string[];
-    /** One per jump cue made, when `probeFollowing` is on. */
+    /** One per "jump" cue made, when `probeFollowing` is on. */
     probes: FollowingProbe[];
     /** Seconds into the route at the end of each frame the runner touched down in. */
     landings: number[];
@@ -2410,11 +2483,16 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
      */
     landingRenderFrames?: number;
     /**
-     * A slow first jump: the runner does not press for the first obstacle
-     * before reaching this distance, even once the words have been up for the
-     * reaction time. Nothing after the first jump looks at a distance.
+     * A slow start: how long the runner takes over the section's first jump
+     * after its words reach the screen. Defaults to the reaction time.
      */
-    firstJumpFromDistance?: number;
+    firstReactionSeconds?: number;
+  }
+
+  interface ScreenContext {
+    frameSeconds: number;
+    landingRenderFrames: number;
+    firstReactionSeconds: number;
   }
 
   /** Why these words would mislead a runner in this state; null if they would not. */
@@ -2426,34 +2504,45 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
       return null;
     }
 
-    const asksGroundJump = GROUND_JUMP_TEXT.test(cue.text);
-    const asksLandFirst = LAND_FIRST_TEXT.test(cue.text);
-    const asksAirJump = AIR_JUMP_TEXT.test(cue.text);
-    // "Land first" is `prepare` until the ground-jump window opens and `jump`
-    // from then on; every other ground-jump text is a `jump` cue.
-    const groundKindFits = asksLandFirst
-      ? cue.kind === 'jump' || cue.kind === 'prepare'
-      : asksGroundJump === (cue.kind === 'jump');
-    if (!groundKindFits || asksAirJump !== (cue.kind === 'doubleJump')) {
+    // Not what a runner sees, but what the words and the cue have to agree on:
+    // only words that say to jump now are a `jump` or `doubleJump` cue, and
+    // every "wait" is a `prepare`.
+    const asks = readWords(cue.text);
+    const expectedKind = {
+      'go-on-ground': 'jump',
+      'go-in-air': 'doubleJump',
+      'wait-in-air': 'prepare',
+      'wait-on-ground': 'prepare',
+      other: cue.kind,
+    }[asks];
+    if (
+      cue.kind !== expectedKind ||
+      (asks === 'other' && (cue.kind === 'jump' || cue.kind === 'doubleJump'))
+    ) {
       return `a ${cue.kind} cue that reads "${cue.text}"`;
     }
 
     const inAir = isRunnerInAir(player);
-    if (asksGroundJump && inAir && !asksLandFirst) {
+    if (asks === 'go-on-ground' && inAir) {
       return `"${cue.text}" while the runner is still in the air`;
     }
-    if (asksAirJump && (!inAir || player.jumpsUsed !== 1)) {
+    if (asks === 'go-in-air' && (!inAir || player.jumpsUsed !== 1)) {
       return `"${cue.text}" with no second jump to spend`;
+    }
+    if (asks === 'wait-in-air' && !inAir) {
+      return `"${cue.text}" while the runner is already on the ground`;
+    }
+    if (asks === 'wait-on-ground' && inAir) {
+      return `"${cue.text}" while the runner is still in the air`;
     }
     return null;
   }
 
   /**
-   * Plays the real engine on from the moment `cue` was made and does what its
-   * words say at once: press jump now if they ask for a jump from where the
-   * runner is, or wait for touchdown first if the runner is still in the air and
-   * the words say to land first. Reports the obstacle it hit, if any, before the
-   * runner is past the one the cue names.
+   * Plays the real engine on from the moment a "jump now" `cue` was made and
+   * presses jump at once, as its words say: from the ground for "jump now", in
+   * the air for the second jump. Reports the obstacle it hit, if any, before the
+   * runner is past the one the words name.
    */
   function probeFollowingWords(
     level: (typeof LEVELS)[number],
@@ -2463,17 +2552,20 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
     frameSeconds: number,
   ): FollowingProbe {
     const { obstacles } = expandObstaclePattern(level);
+    const namedType = cue.text.includes('樹樁') ? 'stump' : 'gap';
     const named = obstacles.find(
       (obstacle) =>
         obstacle.patternId === section.id &&
         obstacle.patternRole === 'followup' &&
-        obstacle.patternIndex === Number(/:jump-(\d+)/.exec(cue.key)?.[1]),
+        obstacle.type === namedType &&
+        obstacle.contactDistance + obstacle.width + PLAYER_COLLISION_WIDTH >
+          from.distance,
     )!;
     const passedAt =
       named.contactDistance + named.width + PLAYER_COLLISION_WIDTH;
     const passiveDrain =
       CUSTOM_GAME_TUNING.passiveEnergyDrainPerSecond * frameSeconds;
-    const asksAirJump = AIR_JUMP_TEXT.test(cue.text);
+    const asksAirJump = readWords(cue.text) === 'go-in-air';
     let state = from;
     let pressed = false;
 
@@ -2508,14 +2600,24 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
    * Plays the real cue -> snapshot -> input -> physics loop like a runner who
    * reads the cue text off the screen and needs `reactionSeconds` to answer it.
    * Snapshots are taken the way `GameCanvas` takes them, with the real
-   * `toGameSnapshot`, and the clock starts when the words on screen change. For
-   * "land first" words it starts no sooner than the runner has seen themselves
-   * touch down: the frame they landed in (the canvas is drawn every frame, not
-   * only on a snapshot) plus `landingRenderFrames`. A press is made on the first
-   * frame the clock has run out, the words still ask for it and the runner's
-   * own state allows it, so there is no same-frame answer, no buffered input,
-   * and nothing is decided from where an obstacle is. `snapshotPhase` and
-   * `framePhase` slide the 120 ms refresh and the frame grid against the
+   * `toGameSnapshot`. Only the words on screen and whether the runner is
+   * drawn on the ground or in the air decide what is pressed, and when:
+   *
+   * - "jump now" from the ground, the section's first jump: once the words have
+   *   been up for `firstReactionSeconds`;
+   * - "jump now" from the ground, after a touchdown: once the runner has seen
+   *   themselves land (the frame they landed in, since the canvas is drawn every
+   *   frame and not only on a snapshot, plus `landingRenderFrames`) and
+   *   `reactionSeconds` more have passed, and the words are up. Waiting for them
+   *   costs nothing more, so a runner who landed long before the ground-jump
+   *   window opened presses on the first frame they read "jump now";
+   * - "press again" in the air: once the words have been up for the reaction
+   *   time;
+   * - "wait" words: never pressed.
+   *
+   * A press is only made on a frame after the one that showed what it answers,
+   * nothing is buffered, and no obstacle's position is looked at. `snapshotPhase`
+   * and `framePhase` slide the 120 ms refresh and the frame grid against the
    * obstacles, so a pass does not depend on a lucky alignment.
    */
   function followScreenCues(
@@ -2530,7 +2632,7 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
       displayDelayFrames = 0,
       probeFollowing = false,
       landingRenderFrames = 1,
-      firstJumpFromDistance = Number.NEGATIVE_INFINITY,
+      firstReactionSeconds = reactionSeconds,
     }: ScreenRouteOptions,
   ): ScreenRoute {
     const { obstacles } = expandObstaclePattern(level);
@@ -2566,6 +2668,8 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
     let onScreen = null as ScreenCue | null;
     let answered = false;
     let wasInAir = false;
+    let lastPressSeconds = Number.NEGATIVE_INFINITY;
+    let pressesMade = 0;
 
     for (
       let frame = 1;
@@ -2577,31 +2681,35 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
       const seconds = (frame - 1) * frameSeconds;
       const inAir = isRunnerInAir(state.player);
       if (onScreen && !answered) {
-        const landedAtSeconds = landings.at(-1) ?? null;
-        const clockStartSeconds =
-          LAND_FIRST_TEXT.test(onScreen.text) && landedAtSeconds !== null
-            ? Math.max(
-                onScreen.shownAtSeconds,
-                landedAtSeconds + landingRenderFrames * frameSeconds,
-              )
-            : onScreen.shownAtSeconds;
-        const tooSoonForSlowFirstJump =
-          onScreen.key === `${section.id}:jump-1` &&
-          state.distance < firstJumpFromDistance;
+        const asks = onScreen.asks;
+        const touchdown = landings.at(-1) ?? null;
+        // A jump from the ground that follows a flight answers its touchdown.
+        const answersTouchdown =
+          asks === 'go-on-ground' &&
+          touchdown !== null &&
+          touchdown > lastPressSeconds;
+        const clockStartSeconds = answersTouchdown
+          ? touchdown + landingRenderFrames * frameSeconds
+          : onScreen.shownAtSeconds;
+        const neededSeconds =
+          pressesMade === 0 && !answersTouchdown
+            ? firstReactionSeconds
+            : reactionSeconds;
+        const canPress =
+          asks === 'go-in-air' ? inAir : asks === 'go-on-ground' && !inAir;
 
         if (
-          seconds - clockStartSeconds >= reactionSeconds - REACTION_EPSILON &&
-          !tooSoonForSlowFirstJump &&
-          (AIR_JUMP_TEXT.test(onScreen.text)
-            ? inAir
-            : !inAir && !state.player.slideHeld)
+          canPress &&
+          seconds - clockStartSeconds >= neededSeconds - REACTION_EPSILON
         ) {
           onScreen.pressedAtSeconds = seconds;
           onScreen.pressedInAir = inAir;
           onScreen.pressedAtDistance = state.distance;
           onScreen.clockStartSeconds = clockStartSeconds;
-          onScreen.landedAtSeconds = landedAtSeconds;
+          onScreen.landedAtSeconds = answersTouchdown ? touchdown : null;
           answered = true;
+          lastPressSeconds = seconds;
+          pressesMade += 1;
           state = applyPlayerAction(state, 'jump');
         }
       }
@@ -2643,7 +2751,11 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
         if (complaint) {
           misleading.add(complaint);
         }
-        if (probeFollowing && cue && (cue.kind === 'jump' || cue.kind === 'doubleJump')) {
+        if (
+          probeFollowing &&
+          cue &&
+          ['go-on-ground', 'go-in-air'].includes(readWords(cue.text))
+        ) {
           probes.push(
             probeFollowingWords(level, section, state, cue, frameSeconds),
           );
@@ -2657,15 +2769,15 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
         if (words !== wordsOnScreen) {
           wordsOnScreen = words;
           answered = false;
+          const asks = readWords(words);
           onScreen =
-            cue &&
-            (GROUND_JUMP_TEXT.test(words) || AIR_JUMP_TEXT.test(words))
+            cue && asks !== 'other'
               ? {
+                  asks,
+                  text: words,
                   key: cue.key,
                   kind: cue.kind,
-                  text: words,
                   shownAtSeconds: now,
-                  lastSnapshotAtSeconds: now,
                   pressedAtSeconds: null,
                   pressedInAir: null,
                   pressedAtDistance: null,
@@ -2676,8 +2788,6 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
           if (onScreen) {
             cues.push(onScreen);
           }
-        } else if (onScreen) {
-          onScreen.lastSnapshotAtSeconds = now;
         }
       }
     }
@@ -2697,40 +2807,119 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
     route: ScreenRoute,
     section: ExpandedSlideSection,
     reactionSeconds: number,
+    { frameSeconds, landingRenderFrames, firstReactionSeconds }: ScreenContext,
   ): string[] {
     const problems = listRouteProblems(route, section);
-    if (
-      route.cues.some(
-        ({ pressedAtSeconds, shownAtSeconds }) =>
-          pressedAtSeconds !== null &&
-          pressedAtSeconds - shownAtSeconds < reactionSeconds - REACTION_EPSILON,
-      )
-    ) {
-      problems.push('pressed before the reaction clock ran out');
-    }
-    // The jump after a landing is answered to the landing, not to the words.
-    if (
-      route.cues.some(
-        ({ text, pressedAtSeconds, landedAtSeconds }) =>
-          LAND_FIRST_TEXT.test(text) &&
-          pressedAtSeconds !== null &&
-          landedAtSeconds !== null &&
-          pressedAtSeconds - landedAtSeconds < reactionSeconds - REACTION_EPSILON,
-      )
-    ) {
-      problems.push('pressed before the reaction time after touchdown ran out');
-    }
-    section.followupJumps.forEach((_type, index) => {
-      const answered = route.cues.some(
-        ({ key, pressedAtSeconds }) =>
-          pressedAtSeconds !== null &&
-          (key === `${section.id}:jump-${index + 1}` ||
-            key === `${section.id}:jump-${index + 1}:second`),
-      );
-      if (!answered) {
-        problems.push(`obstacle ${index + 1} was never answered with a jump`);
+    const landingSeconds =
+      reactionSeconds + landingRenderFrames * frameSeconds;
+
+    route.cues.forEach((cue, index) => {
+      if (cue.pressedAtSeconds === null) {
+        return;
+      }
+
+      const label = `"${cue.text}"`;
+      const afterTouchdown = cue.landedAtSeconds !== null;
+      const isFirstPress = !route.cues
+        .slice(0, index)
+        .some(({ pressedAtSeconds }) => pressedAtSeconds !== null);
+      const neededSeconds =
+        isFirstPress && !afterTouchdown ? firstReactionSeconds : reactionSeconds;
+
+      if (cue.pressedAtSeconds < cue.shownAtSeconds) {
+        problems.push(`${label} was pressed before it reached the screen`);
+      }
+      if (
+        cue.pressedAtSeconds - cue.clockStartSeconds! <
+        neededSeconds - REACTION_EPSILON
+      ) {
+        problems.push(`${label} was pressed before its reaction clock ran out`);
+      }
+      if (cue.asks === 'go-on-ground' && cue.pressedInAir) {
+        problems.push(`${label} was pressed in the air`);
+      }
+      if (cue.asks === 'go-in-air' && !cue.pressedInAir) {
+        problems.push(`${label} was pressed on the ground`);
+      }
+      if (cue.asks !== 'go-on-ground') {
+        return;
+      }
+
+      // Every jump from the ground after the first follows a flight, so it
+      // answers the touchdown that ended it: no sooner than the reaction time
+      // and the render allowance after the runner was first drawn back on the
+      // ground, never in the frame of the landing or the first one after it.
+      if (!isFirstPress && !afterTouchdown) {
+        problems.push(`${label} was pressed with no touchdown to answer`);
+      }
+      if (
+        afterTouchdown &&
+        cue.pressedAtSeconds - cue.landedAtSeconds! <
+          landingSeconds - REACTION_EPSILON
+      ) {
+        problems.push(
+          `${label} was pressed ${Math.round((cue.pressedAtSeconds - cue.landedAtSeconds!) * 1000)} ms after touchdown`,
+        );
       }
     });
+    problems.push(...listJumpOrderProblems(route, section));
+    return problems;
+  }
+
+  /**
+   * The jumps the section asks for, and only those: one per obstacle, in the
+   * order the obstacles come, each from the ground. A jump in the air before
+   * the last obstacle has been jumped, a second one for the same obstacle, or
+   * one that is missing, is a route that did not follow the cues the way they
+   * read. What the words offer after that last jump, the trailing stump's
+   * optional second jump, changes nothing the section asks for.
+   */
+  function listJumpOrderProblems(
+    route: ScreenRoute,
+    section: ExpandedSlideSection,
+  ): string[] {
+    const problems: string[] = [];
+    const expectedKeys = section.followupJumps.map(
+      (_type, index) => `${section.id}:jump-${index + 1}`,
+    );
+    const pressed = route.cues
+      .filter(({ pressedAtSeconds }) => pressedAtSeconds !== null)
+      .slice(0, expectedKeys.length);
+    const pressedKeys = pressed.map(({ key }) => key);
+
+    if (pressedKeys.join() !== expectedKeys.join()) {
+      problems.push(
+        `jumped ${pressedKeys.join(', ') || 'nothing'}, not ${expectedKeys.join(', ')} in that order`,
+      );
+    }
+    pressed.forEach(({ key, asks, pressedInAir }) => {
+      if (asks !== 'go-on-ground' || pressedInAir !== false) {
+        problems.push(`${key} was not a jump from the ground`);
+      }
+    });
+    return problems;
+  }
+
+  /**
+   * A runner who lands should not be left to guess whether to press: some
+   * "wait" words (in the air, or on the ground before the window opens) are on
+   * screen between one jump and the next jump that follows a landing.
+   */
+  function listWaitWordProblems(route: ScreenRoute): string[] {
+    const problems: string[] = [];
+    let toldToWait = false;
+    for (const cue of route.cues) {
+      if (cue.asks === 'wait-in-air' || cue.asks === 'wait-on-ground') {
+        toldToWait = true;
+      }
+      if (cue.pressedAtSeconds === null) {
+        continue;
+      }
+      if (cue.landedAtSeconds !== null && !toldToWait) {
+        problems.push(`"${cue.text}" came with no "wait" words in front of it`);
+      }
+      toldToWait = false;
+    }
     return problems;
   }
 
@@ -2759,7 +2948,7 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
       options: Pick<
         ScreenRouteOptions,
         | 'displayDelayFrames'
-        | 'firstJumpFromDistance'
+        | 'firstReactionSeconds'
         | 'landingRenderFrames'
         | 'probeFollowing'
       > & {
@@ -2769,6 +2958,7 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
         route: ScreenRoute,
         scannedSection: ExpandedSlideSection,
         reaction: number,
+        context: ScreenContext,
       ) => string[] = listScreenProblems,
     ) {
       const { framePhases = FRAME_PHASES, ...routeOptions } = options;
@@ -2781,6 +2971,11 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
       }[] = [];
       let scenarios = 0;
       for (const reaction of reactionSeconds) {
+        const context: ScreenContext = {
+          frameSeconds,
+          landingRenderFrames: routeOptions.landingRenderFrames ?? 1,
+          firstReactionSeconds: routeOptions.firstReactionSeconds ?? reaction,
+        };
         for (const framePhase of framePhases) {
           for (
             let snapshotPhase = 0;
@@ -2795,7 +2990,7 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
               reaction,
               { ...routeOptions, framePhase, snapshotPhase },
             );
-            const problems = check(route, scannedSection, reaction);
+            const problems = check(route, scannedSection, reaction, context);
             scenarios += 1;
             if (problems.length > 0) {
               failures.push({
@@ -2891,7 +3086,7 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
     );
 
     it.each(CUE_FRAME_RATES)(
-      'jumps each obstacle from the ground, in order, no sooner than 200 ms after its words appeared at %s',
+      'jumps stump, gap and stump from the ground, in that order, 200 ms after its words or its touchdown at %s',
       (_label, frameSeconds) => {
         for (const snapshotPhase of [
           0,
@@ -2906,17 +3101,19 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
             REACTION_SECONDS,
             { framePhase: 0, snapshotPhase },
           );
-          const pressed = route.cues.filter(
-            ({ pressedAtSeconds }) => pressedAtSeconds !== null,
-          );
+          // The trailing stump is also offered an optional second jump once it
+          // has been jumped from the ground. The section does not ask for it.
+          const [first, ...afterLanding] = route.cues
+            .filter(({ pressedAtSeconds }) => pressedAtSeconds !== null)
+            .slice(0, 3);
 
           expect(
-            pressed.slice(0, 3).map(({ key, text, pressedInAir }) => ({
+            [first, ...afterLanding].map(({ key, text, pressedInAir }) => ({
               key,
               text,
               pressedInAir,
             })),
-            `the first three presses, snapshot phase ${snapshotPhase}`,
+            `the presses, snapshot phase ${snapshotPhase}`,
           ).toEqual([
             {
               key: `${section.id}:jump-1`,
@@ -2925,23 +3122,51 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
             },
             {
               key: `${section.id}:jump-2`,
-              text: '先別在空中按跳，落地後再跳過裂隙。',
+              text: '現在跳過裂隙。',
               pressedInAir: false,
             },
             {
               key: `${section.id}:jump-3`,
-              text: '先別在空中按跳，落地後再跳過樹樁。',
+              text: '現在跳過樹樁。',
               pressedInAir: false,
             },
           ]);
-          for (const { text, shownAtSeconds, pressedAtSeconds } of pressed) {
+          expect(
+            first!.pressedAtSeconds! - first!.shownAtSeconds,
+            'the first stump is jumped this long after its words appeared',
+          ).toBeGreaterThanOrEqual(REACTION_SECONDS - REACTION_EPSILON);
+          // The runner has been told to wait, so the words are already up when
+          // they land: what they wait for is the touchdown, not the words.
+          for (const { text, landedAtSeconds, pressedAtSeconds } of afterLanding) {
+            expect(landedAtSeconds, `"${text}" answers a touchdown`).not.toBeNull();
             expect(
-              pressedAtSeconds! - shownAtSeconds,
-              `"${text}" answered after this many seconds`,
-            ).toBeGreaterThanOrEqual(REACTION_SECONDS - REACTION_EPSILON);
+              pressedAtSeconds! - landedAtSeconds!,
+              `"${text}" is pressed this long after touchdown`,
+            ).toBeGreaterThanOrEqual(
+              REACTION_SECONDS + frameSeconds - REACTION_EPSILON,
+            );
           }
         }
       },
+    );
+
+    it.each(CUE_FRAME_RATES)(
+      'tells the runner to wait before each jump that follows a landing at %s',
+      (_label, frameSeconds) => {
+        const { scenarios, failures } = scan(
+          level,
+          frameSeconds,
+          [REACTION_SECONDS],
+          { framePhases: DENSE_FRAME_PHASES },
+          (route) => listWaitWordProblems(route),
+        );
+
+        expect(scenarios).toBe(
+          expectedScenarios(frameSeconds, [REACTION_SECONDS], DENSE_FRAME_PHASES),
+        );
+        expect(failures.slice(0, 3), `${failures.length} failing`).toEqual([]);
+      },
+      30_000,
     );
 
     it.each(CUE_FRAME_RATES)(
@@ -2979,88 +3204,27 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
       };
     }
 
-    /**
-     * What went wrong on a route whose gap and trailing stump are answered to a
-     * touchdown. Their words say to land first, so each of those two presses
-     * has to come from the ground, after a touchdown the runner has seen, and
-     * no sooner than the 200 ms reaction plus the frames the render takes to
-     * show that touchdown. Whether the route then clears the section (no
-     * collision, still running, energy left, past the trailing stump) is
-     * `listScreenProblems`.
-     */
-    function listLandingClockProblems(
-      route: ScreenRoute,
-      scannedSection: ExpandedSlideSection,
-      frameSeconds: number,
-      landingRenderFrames: number,
-    ): string[] {
-      const problems = listScreenProblems(
-        route,
-        scannedSection,
-        REACTION_SECONDS,
-      );
-      const neededSeconds = REACTION_SECONDS + landingRenderFrames * frameSeconds;
-
-      for (const jump of [2, 3]) {
-        const answer = route.cues.find(
-          ({ key, text, pressedAtSeconds }) =>
-            key === `${scannedSection.id}:jump-${jump}` &&
-            LAND_FIRST_TEXT.test(text) &&
-            pressedAtSeconds !== null,
-        );
-        if (!answer) {
-          problems.push(`jump ${jump} was never answered from its land-first words`);
-          continue;
-        }
-        if (answer.pressedInAir !== false) {
-          problems.push(`jump ${jump} was pressed in the air`);
-        }
-        if (answer.landedAtSeconds === null) {
-          problems.push(`jump ${jump} was pressed with no touchdown to answer`);
-        } else {
-          const waited = answer.pressedAtSeconds! - answer.landedAtSeconds;
-          if (waited < neededSeconds - REACTION_EPSILON) {
-            problems.push(
-              `jump ${jump} was pressed ${Math.round(waited * 1000)} ms after touchdown`,
-            );
-          }
-        }
-      }
-      return problems;
-    }
-
     // The runs above wait 200 ms after a cue's words reach the screen. The two
-    // jumps that wait for touchdown have the least room: the gap's ground-jump
+    // jumps that follow a landing have the least room: the gap's ground-jump
     // window is only about 285 ms long, so what counts is when the runner has
-    // seen themselves land. These runs start that clock at the first frame the
-    // runner is drawn back on the ground (the canvas is drawn every frame, not
-    // only on a snapshot) and give the render `landingRenderFrames` more to show
-    // it. Pressing then takes at least 200 ms more, so it is never in the frame
-    // of touchdown or the first grounded frame, nothing is buffered, and the
-    // words and whether the runner is in the air are all that decide when to
-    // press, never where an obstacle is. The first jump is taken whenever its
-    // own words have been up for 200 ms, or as late as the route says.
-    const LANDING_CLOCK_ROUTES: {
+    // seen themselves land, and for the first of the three how late they took
+    // it. These runs start the touchdown clock at the first frame the runner is
+    // drawn back on the ground (the canvas is drawn every frame, not only on a
+    // snapshot) and give the render `landingRenderFrames` more to show it.
+    // Pressing then takes at least 200 ms more, so it is never in the frame of
+    // touchdown or the first grounded frame, nothing is buffered, and the words
+    // and whether the runner is in the air are all that decide when to press,
+    // never where an obstacle is.
+    const TOUCHDOWN_ROUTES: {
       name: string;
       options: Pick<
         ScreenRouteOptions,
-        'displayDelayFrames' | 'firstJumpFromDistance' | 'landingRenderFrames'
+        'displayDelayFrames' | 'firstReactionSeconds' | 'landingRenderFrames'
       >;
     }[] = [
       {
-        name: 'the first stump is jumped 200 ms after its words appear',
-        options: {},
-      },
-      {
-        name: 'the first stump is jumped late, 70 px before it',
-        options: { firstJumpFromDistance: firstStump.contactDistance - 70 },
-      },
-      {
-        name: 'the first stump is jumped 50 px before it and every cue is one frame late',
-        options: {
-          firstJumpFromDistance: firstStump.contactDistance - 50,
-          displayDelayFrames: 1,
-        },
+        name: 'the first stump is jumped 250 ms after its words appear',
+        options: { firstReactionSeconds: 0.25 },
       },
       {
         name: 'every touchdown takes two frames to register and every cue is one frame late',
@@ -3068,23 +3232,15 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
       },
     ];
 
-    describe.each(LANDING_CLOCK_ROUTES)('landing clock: $name', ({ options }) => {
+    describe.each(TOUCHDOWN_ROUTES)('touchdown clock: $name', ({ options }) => {
       it.each(CUE_FRAME_RATES)(
-        'clears stump, gap and stump from low energy, 200 ms after each touchdown it has seen, at %s',
+        'clears stump, gap and stump from low energy, jumping 200 ms after each touchdown it has seen, at %s',
         (_label, frameSeconds) => {
-          const landingRenderFrames = options.landingRenderFrames ?? 1;
           const { scenarios, failures } = scan(
             level,
             frameSeconds,
             [REACTION_SECONDS],
             { ...options, framePhases: DENSE_FRAME_PHASES },
-            (route, scannedSection) =>
-              listLandingClockProblems(
-                route,
-                scannedSection,
-                frameSeconds,
-                landingRenderFrames,
-              ),
           );
 
           expect(scenarios).toBe(
@@ -3096,73 +3252,157 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
       );
     });
 
-    it('rejects an answer to a touchdown that is too early, in the air, or missing', () => {
-      const frameSeconds = 1 / 60;
-      const answer = (
-        jump: number,
+    it('rejects a route that jumps too soon after a touchdown, in the air, out of order, or not at all', () => {
+      const context: ScreenContext = {
+        frameSeconds: 1 / 60,
+        landingRenderFrames: 1,
+        firstReactionSeconds: REACTION_SECONDS,
+      };
+      const keys = [1, 2, 3].map((index) => `${section.id}:jump-${index}`);
+      const jumpTexts = ['現在跳過樹樁。', '現在跳過裂隙。', '現在跳過樹樁。'];
+      // The first stump is jumped 200 ms after its words appeared; the gap and
+      // the trailing stump 300 ms after the touchdown that came before each.
+      const jump = (
+        index: 1 | 2 | 3,
         overrides: Partial<ScreenCue> = {},
-      ): ScreenCue => ({
-        key: `${section.id}:jump-${jump}`,
-        kind: 'jump',
-        text: '先別在空中按跳，落地後再跳過裂隙。',
-        shownAtSeconds: 1,
-        lastSnapshotAtSeconds: 1,
-        pressedAtSeconds: 1.3,
-        pressedInAir: false,
-        pressedAtDistance: 11300,
-        clockStartSeconds: 1.1,
-        landedAtSeconds: 1,
-        ...overrides,
+      ): ScreenCue => {
+        const landedAt = index === 1 ? null : index - 1;
+        return {
+          asks: 'go-on-ground',
+          key: keys[index - 1]!,
+          kind: 'jump',
+          text: jumpTexts[index - 1]!,
+          shownAtSeconds: landedAt ?? 0.5,
+          pressedAtSeconds: landedAt === null ? 0.7 : landedAt + 0.3,
+          pressedInAir: false,
+          pressedAtDistance: 10000 + index * 500,
+          clockStartSeconds: landedAt === null ? 0.5 : landedAt + 1 / 60,
+          landedAtSeconds: landedAt,
+          ...overrides,
+        };
+      };
+      const wait = (index: 2 | 3, asks: WordsAsk): ScreenCue => ({
+        ...jump(index),
+        asks,
+        key: `${keys[index - 1]}:wait`,
+        kind: 'prepare',
+        text:
+          asks === 'wait-in-air'
+            ? '先別在空中按跳，落地後等提示，再跳過裂隙。'
+            : '前方裂隙，準備跳躍；稍後依提示起跳。',
+        pressedAtSeconds: null,
+        pressedInAir: null,
+        pressedAtDistance: null,
+        clockStartSeconds: null,
+        landedAtSeconds: null,
+      });
+      const routeOf = (cues: ScreenCue[]): ScreenRoute => ({
+        cues,
+        collisions: [],
+        misleading: [],
+        probes: [],
+        landings: [1, 2],
+        final: {
+          ...createGameState(level),
+          distance: section.finalFollowupClearDistance,
+          energy: LOW_ENERGY,
+        },
       });
       const check = (cues: ScreenCue[]) =>
-        listLandingClockProblems(
-          {
-            cues: [answer(1, { text: '現在跳過樹樁。' }), ...cues],
-            collisions: [],
-            misleading: [],
-            probes: [],
-            landings: [1],
-            final: {
-              ...createGameState(level),
-              distance: section.finalFollowupClearDistance,
-              energy: LOW_ENERGY,
-            },
-          },
-          section,
-          frameSeconds,
-          1,
-        );
+        listScreenProblems(routeOf(cues), section, REACTION_SECONDS, context);
 
-      expect(check([answer(2), answer(3)]), 'on time').toEqual([]);
+      expect(check([jump(1), jump(2), jump(3)]), 'on time').toEqual([]);
       expect(
-        check([answer(2), answer(3, { pressedAtSeconds: 1.1 })]),
+        check([
+          jump(1),
+          jump(2),
+          jump(3),
+          {
+            ...jump(3),
+            asks: 'go-in-air',
+            key: `${keys[2]}:second`,
+            kind: 'doubleJump',
+            text: '空中再按一次二段跳，越過樹樁。',
+            shownAtSeconds: 3.25,
+            pressedAtSeconds: 3.5,
+            pressedInAir: true,
+            clockStartSeconds: 3.25,
+            landedAtSeconds: null,
+          },
+        ]),
+        'the optional second jump the trailing stump is offered after its own jump',
+      ).toEqual([]);
+      expect(
+        check([jump(1), jump(2), jump(3, { pressedAtSeconds: 2.1 })]),
         'a press 100 ms after touchdown',
-      ).toContain('jump 3 was pressed 100 ms after touchdown');
+      ).toContain('"現在跳過樹樁。" was pressed 100 ms after touchdown');
       // 200 ms with nothing for the render to show the touchdown in.
       expect(
-        check([answer(2, { pressedAtSeconds: 1.2 }), answer(3)]),
+        check([jump(1), jump(2, { pressedAtSeconds: 1.2 }), jump(3)]),
         'a press 200 ms after touchdown, with no frame to render it',
-      ).toContain('jump 2 was pressed 200 ms after touchdown');
+      ).toContain('"現在跳過裂隙。" was pressed 200 ms after touchdown');
       expect(
-        check([answer(2, { pressedInAir: true }), answer(3)]),
+        check([jump(1), jump(2, { pressedInAir: true }), jump(3)]),
         'a press in the air',
-      ).toContain('jump 2 was pressed in the air');
+      ).toContain('"現在跳過裂隙。" was pressed in the air');
       expect(
-        check([answer(2), answer(3, { landedAtSeconds: null })]),
+        check([jump(1), jump(2), jump(3, { landedAtSeconds: null })]),
         'a press with no touchdown behind it',
-      ).toContain('jump 3 was pressed with no touchdown to answer');
+      ).toContain('"現在跳過樹樁。" was pressed with no touchdown to answer');
       expect(
-        check([answer(2), answer(3, { pressedAtSeconds: null })]),
-        'a gap or stump that was never answered',
-      ).toContain('jump 3 was never answered from its land-first words');
+        check([
+          jump(1),
+          jump(2, {
+            asks: 'go-in-air',
+            key: `${keys[1]}:second`,
+            kind: 'doubleJump',
+            text: '空中再按一次二段跳，越過裂隙。',
+            pressedInAir: true,
+            landedAtSeconds: null,
+          }),
+          jump(3),
+        ]),
+        'a second jump in the air in place of the gap jump from the ground',
+      ).toContain(`${keys[1]}:second was not a jump from the ground`);
+      expect(
+        check([jump(1), jump(2)]),
+        'a trailing stump that was never jumped',
+      ).toContain(
+        `jumped ${keys.slice(0, 2).join(', ')}, not ${keys.join(', ')} in that order`,
+      );
+      expect(
+        check([jump(1), jump(3), jump(2)]),
+        'the stump jumped before the gap',
+      ).toContain(
+        `jumped ${[keys[0], keys[2], keys[1]].join(', ')}, not ${keys.join(', ')} in that order`,
+      );
+
+      expect(
+        listWaitWordProblems(
+          routeOf([
+            jump(1),
+            wait(2, 'wait-in-air'),
+            jump(2),
+            wait(3, 'wait-on-ground'),
+            jump(3),
+          ]),
+        ),
+        'told to wait before each jump that follows a landing',
+      ).toEqual([]);
+      expect(
+        listWaitWordProblems(
+          routeOf([jump(1), jump(2), wait(3, 'wait-in-air'), jump(3)]),
+        ),
+        'no wait words before the gap jump',
+      ).toEqual(['"現在跳過裂隙。" came with no "wait" words in front of it']);
     });
 
     // Without these the scans could pass because nothing ever goes wrong in
-    // them. Each spacing is one this section had before, and each is where the
-    // follower the next round of QC used found the gap and hit it, at every
-    // rate: 225 px with every jump answered 200 ms after its words appeared,
-    // and 268 px when the first stump is jumped late and the gap is then jumped
-    // 200 ms after landing.
+    // them. Each spacing is one this section had before, and each is where a
+    // runner who follows the words found the gap and hit it, at every rate:
+    // 225 px with every jump answered 200 ms after its words appeared, and
+    // 268 px when the first stump is jumped late (250 ms after its words) and
+    // the gap is then jumped 200 ms after landing.
     it.each(CUE_FRAME_RATES)(
       'hits the gap on the 225 px section 3 spacing it replaces at %s',
       (_label, frameSeconds) => {
@@ -3190,9 +3430,7 @@ describe('level 11 section 3 stump -> gap -> stump with a 200 ms reaction delay'
           withSectionThreeSpacing(268),
           frameSeconds,
           [REACTION_SECONDS],
-          { firstJumpFromDistance: firstStump.contactDistance - 70 },
-          (route, scannedSection) =>
-            listLandingClockProblems(route, scannedSection, frameSeconds, 1),
+          { firstReactionSeconds: 0.25 },
         );
 
         expect(failures.length, `of ${scenarios}`).toBeGreaterThan(0);
@@ -3361,11 +3599,13 @@ describe('stump and gap follow-ups with a gap next to a stump', () => {
   );
 });
 
-// "Don't jump in the air, jump after landing" is only fair while the runner is
-// still shown those words on the first frame back on the ground, however long
-// that frame is, and they never turn into something that asks for the press
-// sooner than the words before them did.
-describe('level 11 cues that say to jump after landing', () => {
+// "Don't press in the air, wait for the prompt after landing" is only fair
+// while the runner is still shown something on the first frame back on the
+// ground, however long that frame is: the same "wait" words while the
+// ground-jump window has not opened, or the "jump now" words once it has. And
+// "jump now" is only ever shown on the ground: nothing in the air asks for a
+// jump from the ground.
+describe('level 11 cues that say to wait for the touchdown', () => {
   const level = LEVELS[10]!;
   const { obstacles, sections } = expandObstaclePattern(level);
 
@@ -3386,18 +3626,36 @@ describe('level 11 cues that say to jump after landing', () => {
       },
       'jump',
     );
-    let airborneCue: ObstacleCue | null = null;
+    const airborneCues: ObstacleCue[] = [];
     do {
       state = advanceGame(state, frameSeconds, () => 0.9);
       if (state.player.jumpHeight > 0) {
-        airborneCue = getObstacleCue(level, state.distance, state.player);
+        const cue = getObstacleCue(level, state.distance, state.player);
+        if (cue) {
+          airborneCues.push(cue);
+        }
       }
     } while (state.player.jumpHeight > 0 && state.status === 'running');
 
     return {
-      airborneCue,
+      airborneCues,
       groundedCue: getObstacleCue(level, state.distance, state.player),
     };
+  }
+
+  /** Takeoffs spread over every ground-jump window that has a jump after it. */
+  function listTakeoffs() {
+    return [sections[1]!, sections[2]!].flatMap((section) =>
+      section.followupJumps.slice(0, -1).flatMap((_type, index) =>
+        getActionableJumpDistances(
+          level,
+          `${section.id}:jump-${index + 1}`,
+          section.followupJumpContactDistances[index]!,
+        )
+          .filter((_distance, position) => position % 3 === 0)
+          .map((takeoff) => ({ section, jump: index + 1, takeoff })),
+      ),
+    );
   }
 
   it.each(CUE_FRAME_RATES)(
@@ -3406,46 +3664,60 @@ describe('level 11 cues that say to jump after landing', () => {
       let toldToWait = 0;
       const stale: string[] = [];
 
-      for (const section of [sections[1]!, sections[2]!]) {
-        section.followupJumps.slice(0, -1).forEach((_type, index) => {
-          const takeoffs = getActionableJumpDistances(
-            level,
-            `${section.id}:jump-${index + 1}`,
-            section.followupJumpContactDistances[index]!,
-          ).filter((_distance, position) => position % 3 === 0);
-
-          for (const takeoff of takeoffs) {
-            const { airborneCue, groundedCue } = jumpAndLand(
-              takeoff,
-              frameSeconds,
-            );
-            if (!airborneCue || !LAND_FIRST_TEXT.test(airborneCue.text)) {
-              continue;
-            }
-            toldToWait += 1;
-            // The words stay as they are. Only `prepare` turning into `jump`
-            // (the ground-jump window opening) is allowed to change.
-            const kindHolds =
-              groundedCue?.kind === airborneCue.kind ||
-              (airborneCue.kind === 'prepare' && groundedCue?.kind === 'jump');
-            if (
-              groundedCue?.key !== airborneCue.key ||
-              groundedCue.text !== airborneCue.text ||
-              !kindHolds
-            ) {
-              stale.push(
-                `${section.id} jump ${index + 1} from ${takeoff}: told "${airborneCue.text}" (${airborneCue.key}|${airborneCue.kind}) in the air, then ${groundedCue ? `"${groundedCue.text}" (${groundedCue.key}|${groundedCue.kind})` : 'nothing'}`,
-              );
-            }
-          }
-        });
+      for (const { section, jump, takeoff } of listTakeoffs()) {
+        const { airborneCues, groundedCue } = jumpAndLand(takeoff, frameSeconds);
+        const beforeLanding = airborneCues.at(-1);
+        if (!beforeLanding || readWords(beforeLanding.text) !== 'wait-in-air') {
+          continue;
+        }
+        toldToWait += 1;
+        // Still waiting, under the same key, or the window has opened and the
+        // words say to jump now. Nothing else may take their place.
+        const waitsOn =
+          groundedCue !== null &&
+          readWords(groundedCue.text) === 'wait-on-ground' &&
+          groundedCue.key === beforeLanding.key &&
+          groundedCue.kind === 'prepare';
+        const jumpsNow =
+          groundedCue !== null &&
+          readWords(groundedCue.text) === 'go-on-ground' &&
+          groundedCue.key === `${section.id}:jump-${jump + 1}` &&
+          groundedCue.kind === 'jump';
+        if (!waitsOn && !jumpsNow) {
+          stale.push(
+            `${section.id} jump ${jump} from ${takeoff}: told "${beforeLanding.text}" (${beforeLanding.key}|${beforeLanding.kind}) in the air, then ${groundedCue ? `"${groundedCue.text}" (${groundedCue.key}|${groundedCue.kind})` : 'nothing'}`,
+          );
+        }
       }
 
       expect(stale).toEqual([]);
       expect(
         toldToWait,
-        'the sweep reaches jump-after-landing cues',
+        'the sweep reaches wait-for-touchdown cues',
       ).toBeGreaterThan(20);
+    },
+  );
+
+  it.each(CUE_FRAME_RATES)(
+    'never asks for a jump from the ground while the runner is in the air at %s',
+    (_label, frameSeconds) => {
+      const early: string[] = [];
+      let inTheAir = 0;
+
+      for (const { section, jump, takeoff } of listTakeoffs()) {
+        const { airborneCues } = jumpAndLand(takeoff, frameSeconds);
+        inTheAir += airborneCues.length;
+        for (const cue of airborneCues) {
+          if (readWords(cue.text) === 'go-on-ground') {
+            early.push(
+              `${section.id} jump ${jump} from ${takeoff}: "${cue.text}" (${cue.key}|${cue.kind}) in the air`,
+            );
+          }
+        }
+      }
+
+      expect(early).toEqual([]);
+      expect(inTheAir, 'the sweep reaches cues in the air').toBeGreaterThan(20);
     },
   );
 });
